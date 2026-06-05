@@ -1,1 +1,36 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>F1 Overlay</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="custom-widget__alertbox-wrapper">
+    <div class="custom-widget__header">
+      <div class="custom-widget__brand">F1 LIVE TIMING</div>
+      <div id="meeting-title" class="custom-widget__meeting">Chargement du Grand Prix...</div>
+      <div id="session-title" class="custom-widget__session">Recherche de la session...</div>
+    </div>
 
+    <div class="custom-widget__board">
+      <div class="custom-widget__board-head">
+        <div>#</div>
+        <div>Pilote</div>
+        <div>Temps</div>
+        <div>Écart</div>
+      </div>
+      <div id="timing-rows"></div>
+    </div>
+  </div>
+
+  <div class="custom-widget__label">
+    <div class="custom-widget__text --small">
+      Most Recent Event: <span id="event-recent" class="--small --bold --italic">None this session</span>
+    </div>
+  </div>
+
+  <script src="overlay.js"></script>
+</body>
+</html>

@@ -22,7 +22,7 @@ HTML = """
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>F1 Live Timing</title>
+  <title>F1 LIVE TIMING</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
@@ -30,7 +30,6 @@ HTML = """
     :root{
       --bg:#000000;
       --panel:#0b0b0b;
-      --panel2:#121212;
       --line:rgba(255,255,255,.08);
       --text:#ffffff;
       --muted:rgba(255,255,255,.65);
@@ -39,7 +38,7 @@ HTML = """
     }
     *{box-sizing:border-box}
     html,body{margin:0;padding:0;background:#000;color:var(--text);font-family:'Anton',sans-serif;overflow:hidden}
-    body{padding:14px}
+    body{padding:14px;text-transform:uppercase}
     .wrap{width:560px}
     .top{
       display:flex;justify-content:space-between;align-items:center;
@@ -48,7 +47,7 @@ HTML = """
       box-shadow:0 16px 36px rgba(0,0,0,.45);
     }
     .eyebrow{
-      font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--muted);
+      font-size:12px;letter-spacing:.22em;color:var(--muted);
       margin-bottom:6px;font-family:Arial,sans-serif;
     }
     .title{
@@ -66,7 +65,7 @@ HTML = """
     }
     table{width:100%;border-collapse:collapse}
     thead th{
-      font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);
+      font-size:11px;letter-spacing:.18em;color:var(--muted);
       padding:12px 16px;text-align:left;border-bottom:1px solid var(--line);font-family:Arial,sans-serif;
     }
     tbody td{
@@ -76,8 +75,9 @@ HTML = """
     .pos{width:58px;font-weight:700}
     .gap{width:120px;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
     .empty{
-      margin-top:12px;padding:14px 16px;border-radius:16px;background:var(--panel2);
-      border:1px solid var(--line);color:var(--muted);text-align:center;font-family:Arial,sans-serif
+      margin-top:12px;padding:14px 16px;border-radius:16px;background:var(--panel);
+      border:1px solid var(--line);color:var(--muted);text-align:center;font-family:Arial,sans-serif;
+      text-transform:none;
     }
     .hidden{display:none}
     .team-audi{border-left:3px solid var(--audi)}
@@ -90,7 +90,7 @@ HTML = """
     <div class="top">
       <div>
         <div class="eyebrow">F1 LIVE TIMING</div>
-        <div id="sessionTitle" class="title">Loading...</div>
+        <div id="sessionTitle" class="title">LOADING...</div>
       </div>
       <div id="statusDot" class="status"></div>
     </div>
@@ -99,9 +99,9 @@ HTML = """
       <table>
         <thead>
           <tr>
-            <th class="pos">Pos</th>
-            <th>Nom</th>
-            <th class="gap">Gap</th>
+            <th class="pos">POS</th>
+            <th>NOM</th>
+            <th class="gap">GAP</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -129,14 +129,14 @@ HTML = """
       const dot = document.getElementById('statusDot');
 
       if(!data.ok){
-        title.textContent = 'aucune séance en cours';
+        title.textContent = 'AUCUNE SÉANCE EN COURS';
         rows.innerHTML = '';
         empty.classList.remove('hidden');
         dot.classList.add('off');
         return;
       }
 
-      title.textContent = data.session || 'session';
+      title.textContent = (data.session || 'SESSION').toUpperCase();
       empty.classList.add('hidden');
       dot.classList.remove('off');
 
@@ -146,9 +146,9 @@ HTML = """
         const cls = teamClass(r.team_name);
         if(cls) tr.className = cls;
         tr.innerHTML = `
-          <td class="pos">${r.position ?? ''}</td>
-          <td>${r.last_name ?? ''}</td>
-          <td class="gap">${r.gap ?? ''}</td>
+          <td class="pos">${(r.position ?? '').toString().toUpperCase()}</td>
+          <td>${(r.last_name ?? '').toString().toUpperCase()}</td>
+          <td class="gap">${(r.gap ?? '').toString().toUpperCase()}</td>
         `;
         rows.appendChild(tr);
       });
@@ -251,7 +251,6 @@ def data():
             payload = {"ok": False, "error": "aucune séance en cours", "session": "", "rows": []}
             _cache["ts"] = now; _cache["data"] = payload
             return jsonify(payload)
-
         session_key = session.get("session_key")
         drivers = api_get("/drivers", {"session_key": session_key})
         positions = api_get("/position", {"session_key": session_key})
@@ -292,7 +291,7 @@ def data():
             })
 
         rows = sorted(rows, key=lambda x: x["position"] if x["position"] is not None else 999)
-        payload = {"ok": True, "session": session.get("session_name") or "session", "rows": rows}
+        payload = {"ok": True, "session": session.get("session_name") or "SESSION", "rows": rows}
         _cache["ts"] = now; _cache["data"] = payload
         return jsonify(payload)
     except Exception as e:

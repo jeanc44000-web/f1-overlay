@@ -3,28 +3,35 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>F1 Overlay</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <title>OpenF1 Overlay</title>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <div class="panel">
+  <div class="overlay">
     <div class="header">
-      <div class="brand">F1 LIVE TIMING</div>
-      <div id="meeting" class="meeting">Chargement...</div>
-      <div id="session" class="session">Veuillez patienter...</div>
+      <div>
+        <div class="eyebrow">OpenF1 Live Timing</div>
+        <div id="sessionTitle" class="title">Loading...</div>
+      </div>
+      <div id="statusDot" class="dot"></div>
     </div>
 
-    <div class="board">
-      <div class="head">
-        <div>#</div>
-        <div>Pilote</div>
-        <div>Temps</div>
-        <div>Écart</div>
-      </div>
-      <div id="rows"></div>
+    <div class="tableWrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="pos">Pos</th>
+            <th>Pilote</th>
+            <th class="gap">Gap</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
     </div>
+
+    <div id="emptyState" class="empty hidden">aucune séance en cours</div>
   </div>
 
-  <script src="{{ url_for('static', filename='overlay.js') }}"></script>
+  <script src="/static/app.js"></script>
 </body>
 </html>

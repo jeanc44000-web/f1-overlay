@@ -19,22 +19,42 @@ HTML = """
 <html>
   <head>
     <meta charset="utf-8">
-    <title>OpenF1</title>
+    <title>OpenF1 Drivers</title>
     <style>
       body { font-family: Arial, sans-serif; padding: 20px; background: #111; color: #eee; }
-      pre { background: #222; padding: 12px; border-radius: 8px; overflow: auto; }
-      button { padding: 10px 16px; margin-bottom: 16px; cursor: pointer; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { padding: 10px; border-bottom: 1px solid #333; text-align: left; }
+      th { background: #222; }
+      .team { color: #aaa; }
     </style>
   </head>
   <body>
-    <h1>OpenF1 data</h1>
-    <button onclick="loadData()">Reload</button>
-    <pre id="out">Loading...</pre>
+    <h1>OpenF1 drivers</h1>
+    <p id="meta">Loading...</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Number</th>
+          <th>Driver</th>
+          <th>Team</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
     <script>
       async function loadData() {
         const res = await fetch('/api/data');
         const data = await res.json();
-        document.getElementById('out').textContent = JSON.stringify(data, null, 2);
+        document.getElementById('meta').textContent =
+          data.ok ? `${data.session} (${data.year}) — ${data.drivers_count} drivers` : `Error: ${data.error}`;
+
+        const rows = document.getElementById('rows');
+        rows.innerHTML = '';
+        (data.drivers || []).forEach(d => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${d.driver_number ?? ''}</td><td>${d.full_name ?? ''}</td><td class="team">${d.team_name ?? ''}</td>`;
+          rows.appendChild(tr);
+        });
       }
       loadData();
     </script>
@@ -85,41 +105,29 @@ def home():
 @app.route("/api/data")
 def data():
     try:
-        for year in [2026, 2025, 2024]:
-            sessions = api_get("/sessions", {"year": year})
-            if isinstance(sessions, list) and sessions:
-                session = sorted(
-                    sessions,
-                    key=lambda s: (
-                        s.get("date_start") or "",
-                        s.get("date_end") or "",
-                        str(s.get("session_key") or "")
-                    )
-                )[-1]
-                session_key = session.get("session_key")
-                drivers = api_get("/drivers", {"session_key": session_key})
-                laps = api_get("/laps", {"session_key": session_key})
-                return jsonify({
-                    "ok": True,
-                    "year": year,
-                    "session": session.get("session_name"),
-                    "session_key": session_key,
-                    "drivers_count": len(drivers) if isinstance(drivers, list) else 0,
-                    "laps_count": len(laps) if isinstance(laps, list) else 0,
-                    "drivers": drivers[:5] if isinstance(drivers, list) else [],
-                    "laps": laps[:5] if isinstance(laps, list) else []
-                })
+        sessions = api_get("/sessions", {"year": 2026})
+        if not isinstance(sessions, list) or not sessions:
+            return jsonify({"ok": False, "error": "No sessions found", "drivers": []})
+
+        session = sorted(
+            sessions,
+            key=lambda s: (s.get("date_start") or "", s.get("date_end") or "", str(s.get("session_key") or ""))
+        )[-1]
+
+        session_key = session.get("session_key")
+        drivers = api_get("/drivers", {"session_key": session_key})
 
         return jsonify({
-            "ok": False,
-            "error": "No sessions found",
-            "drivers": [],
-            "laps": []
+            "ok": True,
+            "session": session.get("session_name"),
+            "year": 2026,
+            "session_key": session_key,
+            "drivers_count": len(drivers) if isinstance(drivers, list) else 0,
+            "drivers": drivers if isinstance(drivers, list) else []
         })
     except Exception as e:
         return jsonify({
             "ok": False,
             "error": str(e),
-            "drivers": [],
-            "laps": []
+            "drivers": []
         })

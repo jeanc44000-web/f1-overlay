@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime, timezone, timedelta
 import requests
 from flask import Flask, jsonify, render_template_string
 
@@ -51,7 +52,7 @@ HTML = """
         const data = await res.json();
 
         document.getElementById('meta').textContent =
-          data.ok ? `${data.session} — ${data.rows.length} drivers` : `Error: ${data.error}`;
+          data.ok ? `${data.session} — ${data.rows.length} drivers` : `aucune séance en cours`;
 
         const rows = document.getElementById('rows');
         rows.innerHTML = '';
@@ -107,7 +108,7 @@ def api_get(path, params=None):
     if r.status_code == 404:
         return []
     if r.status_code == 429:
-        raise RuntimeError("OpenF1 rate limit hit, wait and retry")
+        raise RuntimeError("OpenF1 rate limit hit")
     r.raise_for_status()
     try:
         return r.json()
@@ -122,32 +123,50 @@ def fmt_gap(x):
     s = str(x).strip()
     return s if s.startswith("+") or s.startswith("-") else f"+{s}"
 
-def pick_active_session():
+def parse_dt(s):
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+def pick_current_session():
     sessions = api_get("/sessions", {"year": 2026})
     if not isinstance(sessions, list) or not sessions:
         return None
 
+    now = datetime.now(timezone.utc)
     allowed = {"FP1", "FP2", "FP3", "Qualifying", "Sprint Qualifying", "Sprint", "Race"}
 
-    now = time.time()
-    candidates = []
+    current = []
     for s in sessions:
         name = (s.get("session_name") or "").strip()
         if name not in allowed:
             continue
-        ds = s.get("date_start")
-        de = s.get("date_end")
-        candidates.append(s)
 
-    candidates = sorted(
-        candidates,
+        start = parse_dt(s.get("date_start"))
+        end = parse_dt(s.get("date_end"))
+        if not start:
+            continue
+
+        live_start = start - timedelta(minutes=30)
+        live_end = (end + timedelta(minutes=30)) if end else (start + timedelta(hours=6))
+        if live_start <= now <= live_end:
+            current.append(s)
+
+    if not current:
+        return None
+
+    current = sorted(
+        current,
         key=lambda s: (
             s.get("date_start") or "",
             s.get("date_end") or "",
             str(s.get("session_key") or "")
         )
     )
-    return candidates[-1] if candidates else None
+    return current[-1]
 
 @app.route("/")
 def home():
@@ -160,15 +179,14 @@ def data():
         return jsonify(_cache["data"])
 
     try:
-        session = pick_active_session()
+        session = pick_current_session()
         if not session:
-            payload = {"ok": False, "error": "No session found", "rows": []}
+            payload = {"ok": False, "error": "aucune séance en cours", "session": "", "rows": []}
             _cache["ts"] = now
             _cache["data"] = payload
             return jsonify(payload)
 
         session_key = session.get("session_key")
-
         drivers = api_get("/drivers", {"session_key": session_key})
         positions = api_get("/position", {"session_key": session_key})
         intervals = api_get("/intervals", {"session_key": session_key})
@@ -212,7 +230,7 @@ def data():
 
         payload = {
             "ok": True,
-            "session": session.get("session_name") or "latest",
+            "session": session.get("session_name") or "session",
             "rows": rows
         }
         _cache["ts"] = now
@@ -220,7 +238,7 @@ def data():
         return jsonify(payload)
 
     except Exception as e:
-        payload = {"ok": False, "error": str(e), "rows": []}
+        payload = {"ok": False, "error": str(e), "session": "", "rows": []}
         _cache["ts"] = now
         _cache["data"] = payload
         return jsonify(payload)

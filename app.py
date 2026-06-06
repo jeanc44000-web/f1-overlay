@@ -22,62 +22,74 @@ HTML = """
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenF1 Overlay</title>
+  <title>F1 Live Timing</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
   <style>
     :root{
-      --bg: rgba(7,10,16,0);
-      --card: rgba(15,18,26,.92);
-      --card2: rgba(22,27,39,.82);
-      --line: rgba(255,255,255,.08);
-      --text: #f4f7fb;
-      --muted: rgba(244,247,251,.68);
-      --audi: #ba0000;
-      --cadillac: #ffffff;
-      --cadillacDark: #121212;
+      --bg:#000000;
+      --panel:#0b0b0b;
+      --panel2:#121212;
+      --line:rgba(255,255,255,.08);
+      --text:#ffffff;
+      --muted:rgba(255,255,255,.65);
+      --audi:#ba0000;
+      --cadillac:#ffffff;
     }
     *{box-sizing:border-box}
-    html,body{margin:0;padding:0;background:transparent;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text);overflow:hidden}
+    html,body{margin:0;padding:0;background:#000;color:var(--text);font-family:'Anton',sans-serif;overflow:hidden}
     body{padding:14px}
     .wrap{width:560px}
     .top{
       display:flex;justify-content:space-between;align-items:center;
-      padding:14px 16px;margin-bottom:12px;border:1px solid var(--line);
-      border-radius:18px;background:linear-gradient(135deg, rgba(186,0,0,.16), rgba(255,255,255,.05));
-      backdrop-filter:blur(18px);box-shadow:0 12px 32px rgba(0,0,0,.22);
+      padding:16px 18px;margin-bottom:12px;background:linear-gradient(135deg, #111, #050505);
+      border:1px solid var(--line);border-radius:18px;
+      box-shadow:0 16px 36px rgba(0,0,0,.45);
     }
-    .eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
-    .title{font-size:18px;font-weight:800;line-height:1.1}
-    .status{width:12px;height:12px;border-radius:999px;background:#2ecc71;box-shadow:0 0 18px rgba(46,204,113,.7)}
+    .eyebrow{
+      font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--muted);
+      margin-bottom:6px;font-family:Arial,sans-serif;
+    }
+    .title{
+      font-size:30px;line-height:1;color:var(--text);letter-spacing:.03em;
+    }
+    .status{
+      width:12px;height:12px;border-radius:999px;background:#2ecc71;
+      box-shadow:0 0 18px rgba(46,204,113,.7);
+      flex-shrink:0;
+    }
     .status.off{background:#f39c12;box-shadow:0 0 18px rgba(243,156,18,.7)}
     .table{
-      background:var(--card);border:1px solid var(--line);border-radius:18px;overflow:hidden;
-      backdrop-filter:blur(18px);box-shadow:0 16px 36px rgba(0,0,0,.24)
+      background:var(--panel);border:1px solid var(--line);border-radius:18px;overflow:hidden;
+      box-shadow:0 16px 36px rgba(0,0,0,.45);
     }
     table{width:100%;border-collapse:collapse}
     thead th{
-      font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
-      padding:12px 16px;text-align:left;border-bottom:1px solid var(--line)
+      font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);
+      padding:12px 16px;text-align:left;border-bottom:1px solid var(--line);font-family:Arial,sans-serif;
     }
     tbody td{
-      padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.05);font-size:15px
+      padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.05);font-size:20px;
     }
     tbody tr:last-child td{border-bottom:none}
-    .pos{width:58px;font-weight:800;color:rgba(255,255,255,.9)}
+    .pos{width:58px;font-weight:700}
     .gap{width:120px;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
     .empty{
-      margin-top:12px;padding:14px 16px;border-radius:16px;background:rgba(255,255,255,.06);
-      border:1px solid var(--line);color:var(--muted);text-align:center
+      margin-top:12px;padding:14px 16px;border-radius:16px;background:var(--panel2);
+      border:1px solid var(--line);color:var(--muted);text-align:center;font-family:Arial,sans-serif
     }
     .hidden{display:none}
     .team-audi{border-left:3px solid var(--audi)}
     .team-cadillac{border-left:3px solid var(--cadillac)}
+    .team-cadillac td{color:#fff}
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="top">
       <div>
-        <div class="eyebrow">OpenF1 Live Timing</div>
+        <div class="eyebrow">F1 LIVE TIMING</div>
         <div id="sessionTitle" class="title">Loading...</div>
       </div>
       <div id="statusDot" class="status"></div>
@@ -239,6 +251,7 @@ def data():
             payload = {"ok": False, "error": "aucune séance en cours", "session": "", "rows": []}
             _cache["ts"] = now; _cache["data"] = payload
             return jsonify(payload)
+
         session_key = session.get("session_key")
         drivers = api_get("/drivers", {"session_key": session_key})
         positions = api_get("/position", {"session_key": session_key})

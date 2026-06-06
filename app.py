@@ -1,7 +1,7 @@
 import os
 import time
 import requests
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify
 
 app = Flask(__name__)
 
@@ -11,33 +11,29 @@ OPENF1_PASS = os.getenv("OPENF1_PASS")
 TOKEN_URL = "https://api.openf1.org/token"
 API_BASE = "https://api.openf1.org/v1"
 
-_cached_token = None
+_token = None
 _token_exp = 0
 
 def get_token():
-    global _cached_token, _token_exp
-    if _cached_token and time.time() < _token_exp - 60:
-        return _cached_token
+    global _token, _token_exp
+    if _token and time.time() < _token_exp - 60:
+        return _token
 
-    if not OPENF1_USER or not OPENF1_PASS:
-        raise RuntimeError("Missing OPENF1_USER or OPENF1_PASS")
-
-    response = requests.post(
+    r = requests.post(
         TOKEN_URL,
         data={"username": OPENF1_USER, "password": OPENF1_PASS},
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         timeout=20,
     )
-    response.raise_for_status()
-    token_data = response.json()
-
-    _cached_token = token_data["access_token"]
-    _token_exp = time.time() + int(token_data.get("expires_in", 3600))
-    return _cached_token
+    r.raise_for_status()
+    data = r.json()
+    _token = data["access_token"]
+    _token_exp = time.time() + int(data.get("expires_in", 3600))
+    return _token
 
 def api_get(path, params=None):
     token = get_token()
-    response = requests.get(
+    r = requests.get(
         f"{API_BASE}{path}",
         params=params or {},
         headers={
@@ -46,73 +42,38 @@ def api_get(path, params=None):
         },
         timeout=20,
     )
-    response.raise_for_status()
-    return response.json()
+    r.raise_for_status()
+    return r.json()
 
-def fmt_time(seconds):
-    if seconds is None:
-        return "—"
+@app.route("/api/data")
+def data():
     try:
-        seconds = float(seconds)
-    except Exception:
-        return "—"
-    m = int(seconds // 60)
-    s = seconds - (m * 60)
-    if m > 0:
-        return f"{m}:{s:06.3f}"
-    return f"{s:0.3f}"
+        sessions = api_get("/sessions", {"year": 2026})
+        if not isinstance(sessions, list) or not sessions:
+            return jsonify({"ok": False, "error": "No sessions found", "drivers": [], "laps": []})
 
-def pick_latest_session():
-    sessions = api_get("/sessions", {"year": 2026})
-    if not isinstance(sessions, list) or not sessions:
-        return None, None
+        session = sorted(
+            sessions,
+            key=lambda s: (s.get("date_start") or "", s.get("date_end") or "", str(s.get("session_key") or ""))
+        )[-1]
 
-    def keyfn(s):
-        return s.get("date_start") or s.get("date_end") or ""
-
-    sessions = sorted(sessions, key=keyfn)
-    latest = sessions[-1]
-    return latest.get("session_key"), latest
-
-@app.route("/")
-def home():
-    return render_template("index.html")
-
-@app.route("/api/current")
-def current():
-    try:
-        session_key, session = pick_latest_session()
-        if not session_key:
-            return jsonify({
-                "ok": True,
-                "meeting": "OpenF1",
-                "session": "No session found",
-                "rows": []
-            })
-
-        meeting_key = session.get("meeting_key")
+        session_key = session.get("session_key")
         drivers = api_get("/drivers", {"session_key": session_key})
         laps = api_get("/laps", {"session_key": session_key})
 
-        meeting_info = []
-        if meeting_key is not None:
-            meeting_info = api_get("/meetings", {"meeting_key": meeting_key})
+        return jsonify({
+            "ok": True,
+            "session": session.get("session_name"),
+            "meeting": session.get("meeting_key"),
+            "session_key": session_key,
+            "drivers": drivers,
+            "laps": laps
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "drivers": [], "laps": []})
 
-        meeting_info = meeting_info[0] if isinstance(meeting_info, list) and meeting_info else {}
-
-        name_by_num = {}
-        team_by_num = {}
-
-        for d in drivers if isinstance(drivers, list) else []:
-            num = str(d.get("driver_number", ""))
-            if num:
-                name_by_num[num] = (
-                    d.get("broadcast_name")
-                    or d.get("full_name")
-                    or d.get("driver_name")
-                    or f"#{num}"
-                )
-                team_by_num[num] = d.get("team_name") or "Reserve"
+if __name__ == "__main__":
+    app.run()
 
         best_laps = {}
 

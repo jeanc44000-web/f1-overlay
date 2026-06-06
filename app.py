@@ -22,7 +22,6 @@ def get_token():
     global _token, _token_exp
     if _token and time.time() < _token_exp - 60:
         return _token
-
     if not OPENF1_USER or not OPENF1_PASS:
         raise RuntimeError("Missing OPENF1_USER or OPENF1_PASS")
 
@@ -118,13 +117,7 @@ def pick_current_session():
 
 @app.route("/")
 def home():
-    return jsonify(
-        {
-            "ok": True,
-            "message": "OpenF1 overlay backend",
-            "endpoint": "/api/data",
-        }
-    )
+    return jsonify({"ok": True, "message": "OpenF1 overlay backend", "endpoint": "/api/data"})
 
 
 @app.route("/api/data")
@@ -186,14 +179,12 @@ def data():
             if gap in (None, ""):
                 gap = iv.get("interval")
 
-            rows.append(
-                {
-                    "position": p.get("position"),
-                    "last_name": d.get("last_name") or d.get("broadcast_name") or "",
-                    "team_name": d.get("team_name") or "",
-                    "gap": fmt_gap(gap),
-                }
-            )
+            rows.append({
+                "position": p.get("position"),
+                "last_name": d.get("last_name") or d.get("broadcast_name") or "",
+                "team_name": d.get("team_name") or "",
+                "gap": fmt_gap(gap),
+            })
 
         rows = sorted(rows, key=lambda x: x["position"] if x["position"] is not None else 999)
 

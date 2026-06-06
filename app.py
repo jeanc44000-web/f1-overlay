@@ -46,6 +46,7 @@ def get_token():
     global _token, _token_exp
     if _token and time.time() < _token_exp - 60:
         return _token
+
     r = requests.post(
         TOKEN_URL,
         data={"username": OPENF1_USER, "password": OPENF1_PASS},
@@ -69,8 +70,13 @@ def api_get(path, params=None):
         },
         timeout=20,
     )
+    if r.status_code == 404:
+        return []
     r.raise_for_status()
-    return r.json()
+    try:
+        return r.json()
+    except Exception:
+        return []
 
 @app.route("/")
 def home():
@@ -79,27 +85,41 @@ def home():
 @app.route("/api/data")
 def data():
     try:
-        sessions = api_get("/sessions", {"year": 2026})
-        if not isinstance(sessions, list) or not sessions:
-            return jsonify({"ok": False, "error": "No sessions found", "drivers": [], "laps": []})
-
-        session = sorted(
-            sessions,
-            key=lambda s: (s.get("date_start") or "", s.get("date_end") or "", str(s.get("session_key") or ""))
-        )[-1]
-
-        session_key = session.get("session_key")
-        drivers = api_get("/drivers", {"session_key": session_key})
-        laps = api_get("/laps", {"session_key": session_key})
+        for year in [2026, 2025, 2024]:
+            sessions = api_get("/sessions", {"year": year})
+            if isinstance(sessions, list) and sessions:
+                session = sorted(
+                    sessions,
+                    key=lambda s: (
+                        s.get("date_start") or "",
+                        s.get("date_end") or "",
+                        str(s.get("session_key") or "")
+                    )
+                )[-1]
+                session_key = session.get("session_key")
+                drivers = api_get("/drivers", {"session_key": session_key})
+                laps = api_get("/laps", {"session_key": session_key})
+                return jsonify({
+                    "ok": True,
+                    "year": year,
+                    "session": session.get("session_name"),
+                    "session_key": session_key,
+                    "drivers_count": len(drivers) if isinstance(drivers, list) else 0,
+                    "laps_count": len(laps) if isinstance(laps, list) else 0,
+                    "drivers": drivers[:5] if isinstance(drivers, list) else [],
+                    "laps": laps[:5] if isinstance(laps, list) else []
+                })
 
         return jsonify({
-            "ok": True,
-            "session": session.get("session_name"),
-            "session_key": session_key,
-            "drivers_count": len(drivers) if isinstance(drivers, list) else 0,
-            "laps_count": len(laps) if isinstance(laps, list) else 0,
-            "drivers": drivers[:5] if isinstance(drivers, list) else [],
-            "laps": laps[:5] if isinstance(laps, list) else []
+            "ok": False,
+            "error": "No sessions found",
+            "drivers": [],
+            "laps": []
         })
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e), "drivers": [], "laps": []})
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "drivers": [],
+            "laps": []
+        })

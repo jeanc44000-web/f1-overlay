@@ -19,44 +19,62 @@ HTML = """
 <html>
   <head>
     <meta charset="utf-8">
-    <title>OpenF1 Drivers</title>
+    <title>OpenF1 positions</title>
     <style>
       body { font-family: Arial, sans-serif; padding: 20px; background: #111; color: #eee; }
-      table { border-collapse: collapse; width: 100%; }
+      h1 { margin-bottom: 6px; }
+      .meta { color: #aaa; margin-bottom: 16px; }
+      table { border-collapse: collapse; width: 100%; max-width: 700px; }
       th, td { padding: 10px; border-bottom: 1px solid #333; text-align: left; }
       th { background: #222; }
-      .team { color: #aaa; }
+      .gap { color: #ddd; text-align: right; }
+      .pos { width: 60px; }
+      .name { width: 220px; }
     </style>
   </head>
   <body>
-    <h1>OpenF1 drivers</h1>
-    <p id="meta">Loading...</p>
+    <h1>OpenF1 positions</h1>
+    <div class="meta" id="meta">Loading...</div>
     <table>
       <thead>
         <tr>
-          <th>Number</th>
-          <th>Driver</th>
-          <th>Team</th>
+          <th class="pos">Pos</th>
+          <th class="name">Pilote</th>
+          <th class="gap">Gap</th>
         </tr>
       </thead>
       <tbody id="rows"></tbody>
     </table>
+
     <script>
+      function formatGap(v) {
+        if (v === null || v === undefined || v === "") return "";
+        return String(v);
+      }
+
       async function loadData() {
         const res = await fetch('/api/data');
         const data = await res.json();
+
         document.getElementById('meta').textContent =
-          data.ok ? `${data.session} (${data.year}) — ${data.drivers_count} drivers` : `Error: ${data.error}`;
+          data.ok ? `${data.session} (${data.year}) — ${data.rows.length} drivers` : `Error: ${data.error}`;
 
         const rows = document.getElementById('rows');
         rows.innerHTML = '';
-        (data.drivers || []).forEach(d => {
+
+        (data.rows || []).forEach(r => {
           const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${d.driver_number ?? ''}</td><td>${d.full_name ?? ''}</td><td class="team">${d.team_name ?? ''}</td>`;
+          tr.innerHTML = `
+            <td class="pos">${r.position ?? ''}</td>
+            <td class="name">${r.first_name ?? ''} ${r.last_name ?? ''}</td>
+            <td class="gap">${formatGap(r.gap)}</td>
+          `;
           rows.appendChild(tr);
         });
       }
+
       loadData();
+      setInterval(loadData, 4000);
     </script>
   </body>
 </html>
@@ -66,6 +84,9 @@ def get_token():
     global _token, _token_exp
     if _token and time.time() < _token_exp - 60:
         return _token
+
+    if not OPENF1_USER or not OPENF1_PASS:
+        raise RuntimeError("Missing OPENF1_USER or OPENF1_PASS")
 
     r = requests.post(
         TOKEN_URL,
@@ -98,6 +119,21 @@ def api_get(path, params=None):
     except Exception:
         return []
 
+def pick_latest_session():
+    for year in [2026, 2025, 2024]:
+        sessions = api_get("/sessions", {"year": year})
+        if isinstance(sessions, list) and sessions:
+            session = sorted(
+                sessions,
+                key=lambda s: (
+                    s.get("date_start") or "",
+                    s.get("date_end") or "",
+                    str(s.get("session_key") or "")
+                )
+            )[-1]
+            return year, session
+    return None, None
+
 @app.route("/")
 def home():
     return render_template_string(HTML)
@@ -105,29 +141,59 @@ def home():
 @app.route("/api/data")
 def data():
     try:
-        sessions = api_get("/sessions", {"year": 2026})
-        if not isinstance(sessions, list) or not sessions:
-            return jsonify({"ok": False, "error": "No sessions found", "drivers": []})
-
-        session = sorted(
-            sessions,
-            key=lambda s: (s.get("date_start") or "", s.get("date_end") or "", str(s.get("session_key") or ""))
-        )[-1]
+        year, session = pick_latest_session()
+        if not session:
+            return jsonify({"ok": False, "error": "No sessions found", "rows": []})
 
         session_key = session.get("session_key")
         drivers = api_get("/drivers", {"session_key": session_key})
+        positions = api_get("/position", {"session_key": session_key})
+        intervals = api_get("/intervals", {"session_key": session_key})
+
+        driver_map = {}
+        for d in drivers if isinstance(drivers, list) else []:
+            dn = d.get("driver_number")
+            if dn is not None:
+                driver_map[int(dn)] = d
+
+        latest_pos = {}
+        for p in positions if isinstance(positions, list) else []:
+            dn = p.get("driver_number")
+            if dn is None:
+                continue
+            latest_pos[int(dn)] = p
+
+        latest_interval = {}
+        for i in intervals if isinstance(intervals, list) else []:
+            dn = i.get("driver_number")
+            if dn is None:
+                continue
+            latest_interval[int(dn)] = i
+
+        rows = []
+        for dn, p in latest_pos.items():
+            d = driver_map.get(dn, {})
+            iv = latest_interval.get(dn, {})
+            rows.append({
+                "position": p.get("position"),
+                "driver_number": dn,
+                "first_name": d.get("first_name") or "",
+                "last_name": d.get("last_name") or "",
+                "gap": iv.get("gap_to_leader") or iv.get("interval") or iv.get("gap") or ""
+            })
+
+        rows = sorted(rows, key=lambda x: x["position"] if x["position"] is not None else 999)
 
         return jsonify({
             "ok": True,
+            "year": year,
             "session": session.get("session_name"),
-            "year": 2026,
             "session_key": session_key,
-            "drivers_count": len(drivers) if isinstance(drivers, list) else 0,
-            "drivers": drivers if isinstance(drivers, list) else []
+            "rows": rows
         })
+
     except Exception as e:
-        return jsonify({
-            "ok": False,
-            "error": str(e),
-            "drivers": []
-        })
+        return jsonify({"ok": False, "error": str(e), "rows": []})
+
+if __name__ == "__main__":
+    app.run()

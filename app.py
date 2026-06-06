@@ -104,24 +104,17 @@ def pick_session():
         start = parse_dt(s.get("date_start"))
         if not start:
             continue
-
         name = (s.get("session_name") or "").strip()
         if name not in allowed:
             continue
-
         live_start = start - timedelta(minutes=60)
         end = parse_dt(s.get("date_end"))
         live_end = (end + timedelta(minutes=60)) if end else (start + timedelta(hours=6))
-
         if live_start <= now <= live_end:
             candidates.append(s)
 
     if candidates:
-        candidates.sort(key=lambda s: (
-            s.get("date_start") or "",
-            s.get("date_end") or "",
-            str(s.get("session_key") or ""),
-        ))
+        candidates.sort(key=lambda s: (s.get("date_start") or "", s.get("date_end") or "", str(s.get("session_key") or "")))
         return candidates[-1]
 
     future = []
@@ -174,6 +167,8 @@ def fetch_live_rows(session_key):
             gap = iv.get("interval_to_position_ahead")
         if gap in (None, ""):
             gap = iv.get("interval")
+        if gap in (None, "") and p.get("position") not in (None, 1):
+            gap = ""
 
         rows.append({
             "position": p.get("position"),

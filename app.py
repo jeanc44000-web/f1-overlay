@@ -3,11 +3,9 @@ import time
 from datetime import datetime, timezone, timedelta
 
 import requests
-from flask import Flask, jsonify
-from flask_cors import CORS
+from flask import Flask, jsonify, make_response
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 OPENF1_USER = os.getenv("OPENF1_USER")
 OPENF1_PASS = os.getenv("OPENF1_PASS")
@@ -18,6 +16,14 @@ API_BASE = "https://api.openf1.org/v1"
 _token = None
 _token_exp = 0
 _cache = {"ts": 0, "data": None}
+
+
+def cors_json(payload, status=200):
+    resp = make_response(jsonify(payload), status)
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return resp
 
 
 def get_token():
@@ -80,49 +86,124 @@ def parse_dt(s):
         return None
 
 
-def pick_current_session():
-    sessions = api_get("/sessions", {"year": 2026})
-    if not isinstance(sessions, list) or not sessions:
+def sessions_for_year(year=2026):
+    sessions = api_get("/sessions", {"year": year})
+    return sessions if isinstance(sessions, list) else []
+
+
+def pick_session():
+    sessions = sessions_for_year(2026)
+    if not sessions:
         return None
 
     now = datetime.now(timezone.utc)
-    allowed = {"FP1", "FP2", "FP3", "Qualifying", "Sprint Qualifying", "Sprint", "Race"}
 
+    # 1) Priorité à la session la plus récente / la plus proche
     candidates = []
     for s in sessions:
-        if (s.get("session_name") or "").strip() not in allowed:
-            continue
         start = parse_dt(s.get("date_start"))
-        end = parse_dt(s.get("date_end"))
         if not start:
             continue
-        live_start = start - timedelta(minutes=30)
-        live_end = (end + timedelta(minutes=30)) if end else (start + timedelta(hours=6))
+
+        name = (s.get("session_name") or "").strip()
+        allowed = {"FP1", "FP2", "FP3", "Qualifying", "Sprint Qualifying", "Sprint", "Race"}
+        if name not in allowed:
+            continue
+
+        # Fenêtre large: 60 min avant, 6h après
+        live_start = start - timedelta(minutes=60)
+        end = parse_dt(s.get("date_end"))
+        live_end = (end + timedelta(minutes=60)) if end else (start + timedelta(hours=6))
+
         if live_start <= now <= live_end:
             candidates.append(s)
 
-    if not candidates:
-        return None
+    if candidates:
+        candidates.sort(key=lambda s: (
+            s.get("date_start") or "",
+            s.get("date_end") or "",
+            str(s.get("session_key") or ""),
+        ))
+        return candidates[-1]
 
-    candidates.sort(key=lambda s: (s.get("date_start") or "", s.get("date_end") or "", str(s.get("session_key") or "")))
-    return candidates[-1]
+    # 2) Sinon on prend la prochaine session du jour la plus proche
+    future = []
+    for s in sessions:
+        start = parse_dt(s.get("date_start"))
+        if not start:
+            continue
+        if start >= now - timedelta(hours=6):
+            future.append(s)
+
+    if future:
+        future.sort(key=lambda s: parse_dt(s.get("date_start")) or datetime.max.replace(tzinfo=timezone.utc))
+        return future[0]
+
+    return None
+
+
+def fetch_live_rows(session_key):
+    drivers = api_get("/drivers", {"session_key": session_key})
+    positions = api_get("/position", {"session_key": session_key})
+    intervals = api_get("/intervals", {"session_key": session_key})
+
+    driver_map = {}
+    for d in drivers if isinstance(drivers, list) else []:
+        dn = d.get("driver_number")
+        if dn is not None:
+            driver_map[int(dn)] = d
+
+    latest_pos = {}
+    for p in positions if isinstance(positions, list) else []:
+        dn = p.get("driver_number")
+        if dn is None:
+            continue
+        latest_pos[int(dn)] = p
+
+    latest_interval = {}
+    for i in intervals if isinstance(intervals, list) else []:
+        dn = i.get("driver_number")
+        if dn is None:
+            continue
+        latest_interval[int(dn)] = i
+
+    rows = []
+    for dn, p in latest_pos.items():
+        d = driver_map.get(dn, {})
+        iv = latest_interval.get(dn, {})
+
+        gap = iv.get("gap_to_leader")
+        if gap in (None, ""):
+            gap = iv.get("interval_to_position_ahead")
+        if gap in (None, ""):
+            gap = iv.get("interval")
+
+        rows.append({
+            "position": p.get("position"),
+            "last_name": d.get("last_name") or d.get("broadcast_name") or "",
+            "team_name": d.get("team_name") or "",
+            "gap": fmt_gap(gap),
+        })
+
+    rows.sort(key=lambda x: x["position"] if x["position"] is not None else 999)
+    return rows
 
 
 @app.route("/")
 def home():
-    return jsonify({"ok": True, "message": "OpenF1 overlay backend", "endpoint": "/api/data"})
+    return cors_json({"ok": True, "message": "OpenF1 overlay backend", "endpoint": "/api/data"})
 
 
-@app.route("/api/data")
+@app.route("/api/data", methods=["GET", "OPTIONS"])
 def data():
     now = time.time()
     tick = int(now // 5) % 3
 
     if _cache["data"] is not None and now - _cache["ts"] < 5:
-        return jsonify(_cache["data"])
+        return cors_json(_cache["data"])
 
     try:
-        session = pick_current_session()
+        session = pick_session()
 
         if not session:
             payload = {
@@ -134,60 +215,21 @@ def data():
             }
             _cache["ts"] = now
             _cache["data"] = payload
-            return jsonify(payload)
+            return cors_json(payload)
 
         session_key = session.get("session_key")
-        drivers = api_get("/drivers", {"session_key": session_key})
-        positions = api_get("/position", {"session_key": session_key})
-        intervals = api_get("/intervals", {"session_key": session_key})
-
-        driver_map = {}
-        for d in drivers if isinstance(drivers, list) else []:
-            dn = d.get("driver_number")
-            if dn is not None:
-                driver_map[int(dn)] = d
-
-        latest_pos = {}
-        for p in positions if isinstance(positions, list) else []:
-            dn = p.get("driver_number")
-            if dn is not None:
-                latest_pos[int(dn)] = p
-
-        latest_interval = {}
-        for i in intervals if isinstance(intervals, list) else []:
-            dn = i.get("driver_number")
-            if dn is not None:
-                latest_interval[int(dn)] = i
-
-        rows = []
-        for dn, p in latest_pos.items():
-            d = driver_map.get(dn, {})
-            iv = latest_interval.get(dn, {})
-
-            gap = iv.get("gap_to_leader")
-            if gap in (None, ""):
-                gap = iv.get("interval_to_position_ahead")
-            if gap in (None, ""):
-                gap = iv.get("interval")
-
-            rows.append({
-                "position": p.get("position"),
-                "last_name": d.get("last_name") or d.get("broadcast_name") or "",
-                "team_name": d.get("team_name") or "",
-                "gap": fmt_gap(gap),
-            })
-
-        rows = sorted(rows, key=lambda x: x["position"] if x["position"] is not None else 999)
+        rows = fetch_live_rows(session_key)
 
         payload = {
             "ok": True,
             "session": (session.get("session_name") or "SESSION").upper(),
+            "session_key": session_key,
             "tick": tick,
             "rows": rows,
         }
         _cache["ts"] = now
         _cache["data"] = payload
-        return jsonify(payload)
+        return cors_json(payload)
 
     except Exception as e:
         payload = {
@@ -199,7 +241,15 @@ def data():
         }
         _cache["ts"] = now
         _cache["data"] = payload
-        return jsonify(payload)
+        return cors_json(payload)
+
+
+@app.after_request
+def add_cors_headers(resp):
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return resp
 
 
 if __name__ == "__main__":

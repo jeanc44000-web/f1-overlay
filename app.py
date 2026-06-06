@@ -130,12 +130,13 @@ def home():
 @app.route("/api/data")
 def data():
     now = time.time()
+    tick = int(now // 5) % 3
+
     if _cache["data"] is not None and now - _cache["ts"] < 5:
         return jsonify(_cache["data"])
 
     try:
         session = pick_current_session()
-        tick = int(now // 5) % 3
 
         if not session:
             payload = {
@@ -211,7 +212,7 @@ def data():
             "ok": False,
             "error": str(e),
             "session": "",
-            "tick": int(now // 5) % 3,
+            "tick": tick,
             "rows": [],
         }
         _cache["ts"] = now
@@ -220,4 +221,4 @@ def data():
 
 
 if __name__ == "__main__":
-    app.run()
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))

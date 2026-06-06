@@ -106,6 +106,8 @@ def api_get(path, params=None):
     )
     if r.status_code == 404:
         return []
+    if r.status_code == 429:
+        raise RuntimeError("OpenF1 rate limit hit, wait and retry")
     r.raise_for_status()
     try:
         return r.json()
@@ -117,8 +119,35 @@ def fmt_gap(x):
         return ""
     if isinstance(x, (int, float)):
         return f"+{x:.3f}" if x >= 0 else f"{x:.3f}"
-    s = str(x)
+    s = str(x).strip()
     return s if s.startswith("+") or s.startswith("-") else f"+{s}"
+
+def pick_active_session():
+    sessions = api_get("/sessions", {"year": 2026})
+    if not isinstance(sessions, list) or not sessions:
+        return None
+
+    allowed = {"FP1", "FP2", "FP3", "Qualifying", "Sprint Qualifying", "Sprint", "Race"}
+
+    now = time.time()
+    candidates = []
+    for s in sessions:
+        name = (s.get("session_name") or "").strip()
+        if name not in allowed:
+            continue
+        ds = s.get("date_start")
+        de = s.get("date_end")
+        candidates.append(s)
+
+    candidates = sorted(
+        candidates,
+        key=lambda s: (
+            s.get("date_start") or "",
+            s.get("date_end") or "",
+            str(s.get("session_key") or "")
+        )
+    )
+    return candidates[-1] if candidates else None
 
 @app.route("/")
 def home():
@@ -131,9 +160,18 @@ def data():
         return jsonify(_cache["data"])
 
     try:
-        drivers = api_get("/drivers", {"session_key": "latest"})
-        positions = api_get("/position", {"session_key": "latest"})
-        intervals = api_get("/intervals", {"session_key": "latest"})
+        session = pick_active_session()
+        if not session:
+            payload = {"ok": False, "error": "No session found", "rows": []}
+            _cache["ts"] = now
+            _cache["data"] = payload
+            return jsonify(payload)
+
+        session_key = session.get("session_key")
+
+        drivers = api_get("/drivers", {"session_key": session_key})
+        positions = api_get("/position", {"session_key": session_key})
+        intervals = api_get("/intervals", {"session_key": session_key})
 
         driver_map = {}
         for d in drivers if isinstance(drivers, list) else []:
@@ -159,7 +197,11 @@ def data():
         for dn, p in latest_pos.items():
             d = driver_map.get(dn, {})
             iv = latest_interval.get(dn, {})
-            gap = iv.get("gap_to_leader") or iv.get("interval") or ""
+            gap = iv.get("gap_to_leader")
+            if gap in (None, ""):
+                gap = iv.get("interval_to_position_ahead")
+            if gap in (None, ""):
+                gap = iv.get("interval")
             rows.append({
                 "position": p.get("position"),
                 "last_name": d.get("last_name") or d.get("broadcast_name") or "",
@@ -170,7 +212,7 @@ def data():
 
         payload = {
             "ok": True,
-            "session": "latest",
+            "session": session.get("session_name") or "latest",
             "rows": rows
         }
         _cache["ts"] = now

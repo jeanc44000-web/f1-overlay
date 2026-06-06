@@ -86,11 +86,10 @@ def pick_current_session():
     now = datetime.now(timezone.utc)
     allowed = {"FP1", "FP2", "FP3", "Qualifying", "Sprint Qualifying", "Sprint", "Race"}
 
-    current = []
+    candidates = []
     for s in sessions:
         if (s.get("session_name") or "").strip() not in allowed:
             continue
-
         start = parse_dt(s.get("date_start"))
         end = parse_dt(s.get("date_end"))
         if not start:
@@ -99,20 +98,13 @@ def pick_current_session():
         live_start = start - timedelta(minutes=30)
         live_end = (end + timedelta(minutes=30)) if end else (start + timedelta(hours=6))
         if live_start <= now <= live_end:
-            current.append(s)
+            candidates.append(s)
 
-    if not current:
+    if not candidates:
         return None
 
-    current = sorted(
-        current,
-        key=lambda s: (
-            s.get("date_start") or "",
-            s.get("date_end") or "",
-            str(s.get("session_key") or ""),
-        ),
-    )
-    return current[-1]
+    candidates.sort(key=lambda s: (s.get("date_start") or "", s.get("date_end") or "", str(s.get("session_key") or "")))
+    return candidates[-1]
 
 
 @app.route("/")
@@ -157,16 +149,14 @@ def data():
         latest_pos = {}
         for p in positions if isinstance(positions, list) else []:
             dn = p.get("driver_number")
-            if dn is None:
-                continue
-            latest_pos[int(dn)] = p
+            if dn is not None:
+                latest_pos[int(dn)] = p
 
         latest_interval = {}
         for i in intervals if isinstance(intervals, list) else []:
             dn = i.get("driver_number")
-            if dn is None:
-                continue
-            latest_interval[int(dn)] = i
+            if dn is not None:
+                latest_interval[int(dn)] = i
 
         rows = []
         for dn, p in latest_pos.items():
@@ -179,12 +169,14 @@ def data():
             if gap in (None, ""):
                 gap = iv.get("interval")
 
-            rows.append({
-                "position": p.get("position"),
-                "last_name": d.get("last_name") or d.get("broadcast_name") or "",
-                "team_name": d.get("team_name") or "",
-                "gap": fmt_gap(gap),
-            })
+            rows.append(
+                {
+                    "position": p.get("position"),
+                    "last_name": d.get("last_name") or d.get("broadcast_name") or "",
+                    "team_name": d.get("team_name") or "",
+                    "gap": fmt_gap(gap),
+                }
+            )
 
         rows = sorted(rows, key=lambda x: x["position"] if x["position"] is not None else 999)
 

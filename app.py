@@ -2,7 +2,7 @@ import os
 import time
 from datetime import datetime, timezone, timedelta
 import requests
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template
 
 app = Flask(__name__)
 
@@ -16,64 +16,6 @@ _token = None
 _token_exp = 0
 _cache = {"ts": 0, "data": None}
 
-HTML = """
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <title>OpenF1 positions</title>
-    <style>
-      body { font-family: Arial, sans-serif; padding: 20px; background: #111; color: #eee; }
-      h1 { margin-bottom: 6px; }
-      .meta { color: #aaa; margin-bottom: 16px; }
-      table { border-collapse: collapse; width: 100%; max-width: 700px; }
-      th, td { padding: 10px; border-bottom: 1px solid #333; text-align: left; }
-      th { background: #222; }
-      .gap { text-align: right; }
-    </style>
-  </head>
-  <body>
-    <h1>OpenF1 positions</h1>
-    <div class="meta" id="meta">Loading...</div>
-    <table>
-      <thead>
-        <tr>
-          <th>Pos</th>
-          <th>Nom</th>
-          <th>Gap</th>
-        </tr>
-      </thead>
-      <tbody id="rows"></tbody>
-    </table>
-
-    <script>
-      async function loadData() {
-        const res = await fetch('/api/data');
-        const data = await res.json();
-
-        document.getElementById('meta').textContent =
-          data.ok ? `${data.session} — ${data.rows.length} drivers` : `aucune séance en cours`;
-
-        const rows = document.getElementById('rows');
-        rows.innerHTML = '';
-
-        (data.rows || []).forEach(r => {
-          const tr = document.createElement('tr');
-          tr.innerHTML = `
-            <td>${r.position ?? ''}</td>
-            <td>${r.last_name ?? ''}</td>
-            <td class="gap">${r.gap ?? ''}</td>
-          `;
-          rows.appendChild(tr);
-        });
-      }
-
-      loadData();
-      setInterval(loadData, 5000);
-    </script>
-  </body>
-</html>
-"""
 
 def get_token():
     global _token, _token_exp
@@ -93,6 +35,7 @@ def get_token():
     _token = data["access_token"]
     _token_exp = time.time() + int(data.get("expires_in", 3600))
     return _token
+
 
 def api_get(path, params=None):
     token = get_token()
@@ -115,6 +58,7 @@ def api_get(path, params=None):
     except Exception:
         return []
 
+
 def fmt_gap(x):
     if x is None or x == "":
         return ""
@@ -123,6 +67,7 @@ def fmt_gap(x):
     s = str(x).strip()
     return s if s.startswith("+") or s.startswith("-") else f"+{s}"
 
+
 def parse_dt(s):
     if not s:
         return None
@@ -130,6 +75,7 @@ def parse_dt(s):
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except Exception:
         return None
+
 
 def pick_current_session():
     sessions = api_get("/sessions", {"year": 2026})
@@ -168,9 +114,11 @@ def pick_current_session():
     )
     return current[-1]
 
+
 @app.route("/")
 def home():
-    return render_template_string(HTML)
+    return render_template("index.html")
+
 
 @app.route("/api/data")
 def data():
@@ -223,6 +171,8 @@ def data():
             rows.append({
                 "position": p.get("position"),
                 "last_name": d.get("last_name") or d.get("broadcast_name") or "",
+                "team_name": d.get("team_name") or "",
+                "team_colour": d.get("team_colour") or "",
                 "gap": fmt_gap(gap)
             })
 
@@ -242,6 +192,3 @@ def data():
         _cache["ts"] = now
         _cache["data"] = payload
         return jsonify(payload)
-
-if __name__ == "__main__":
-    app.run()

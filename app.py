@@ -111,34 +111,13 @@ def api_get(path, params=None):
     except Exception:
         return []
 
-def pick_latest_relevant_session():
-    allowed = {"FP1", "FP2", "FP3", "Qualifying", "Sprint Qualifying", "Sprint", "Race"}
-
-    for year in [2026, 2025, 2024]:
-        sessions = api_get("/sessions", {"year": year})
-        if not isinstance(sessions, list) or not sessions:
-            continue
-
-        filtered = []
-        for s in sessions:
-            name = (s.get("session_name") or "").strip()
-            if name in allowed:
-                filtered.append(s)
-
-        if not filtered:
-            continue
-
-        filtered = sorted(
-            filtered,
-            key=lambda s: (
-                s.get("date_end") or s.get("date_start") or "",
-                s.get("date_start") or "",
-                str(s.get("session_key") or "")
-            )
-        )
-        return year, filtered[-1]
-
-    return None, None
+def fmt_gap(x):
+    if x is None or x == "":
+        return ""
+    if isinstance(x, (int, float)):
+        return f"+{x:.3f}" if x >= 0 else f"{x:.3f}"
+    s = str(x)
+    return s if s.startswith("+") or s.startswith("-") else f"+{s}"
 
 @app.route("/")
 def home():
@@ -147,11 +126,26 @@ def home():
 @app.route("/api/data")
 def data():
     try:
-        year, session = pick_latest_relevant_session()
-        if not session:
+        sessions = api_get("/sessions", {"year": 2026})
+        if not isinstance(sessions, list) or not sessions:
+            return jsonify({"ok": False, "error": "No sessions found", "rows": []})
+
+        allowed = {"FP1", "FP2", "FP3", "Qualifying", "Sprint Qualifying", "Sprint", "Race"}
+        filtered = [s for s in sessions if (s.get("session_name") or "").strip() in allowed]
+        if not filtered:
             return jsonify({"ok": False, "error": "No relevant sessions found", "rows": []})
 
+        filtered = sorted(
+            filtered,
+            key=lambda s: (
+                s.get("date_start") or "",
+                s.get("date_end") or "",
+                str(s.get("session_key") or "")
+            )
+        )
+        session = filtered[-1]
         session_key = session.get("session_key")
+
         drivers = api_get("/drivers", {"session_key": session_key})
         positions = api_get("/position", {"session_key": session_key})
         intervals = api_get("/intervals", {"session_key": session_key})
@@ -185,14 +179,14 @@ def data():
                 "position": p.get("position"),
                 "driver_number": dn,
                 "first_name": d.get("first_name") or d.get("broadcast_name") or "",
-                "gap": gap
+                "gap": fmt_gap(gap)
             })
 
         rows = sorted(rows, key=lambda x: x["position"] if x["position"] is not None else 999)
 
         return jsonify({
             "ok": True,
-            "year": year,
+            "year": 2026,
             "session": session.get("session_name"),
             "session_key": session_key,
             "rows": rows

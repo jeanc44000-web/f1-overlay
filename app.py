@@ -13,6 +13,7 @@ API_BASE = "https://api.openf1.org/v1"
 
 _token = None
 _token_exp = 0
+_cache = {"ts": 0, "data": None}
 
 HTML = """
 <!doctype html>
@@ -37,7 +38,7 @@ HTML = """
       <thead>
         <tr>
           <th>Pos</th>
-          <th>Pilote</th>
+          <th>Nom</th>
           <th>Gap</th>
         </tr>
       </thead>
@@ -50,7 +51,7 @@ HTML = """
         const data = await res.json();
 
         document.getElementById('meta').textContent =
-          data.ok ? `${data.session} (${data.year}) — ${data.rows.length} drivers` : `Error: ${data.error}`;
+          data.ok ? `${data.session} — ${data.rows.length} drivers` : `Error: ${data.error}`;
 
         const rows = document.getElementById('rows');
         rows.innerHTML = '';
@@ -59,7 +60,7 @@ HTML = """
           const tr = document.createElement('tr');
           tr.innerHTML = `
             <td>${r.position ?? ''}</td>
-            <td>${r.first_name ?? ''}</td>
+            <td>${r.last_name ?? ''}</td>
             <td class="gap">${r.gap ?? ''}</td>
           `;
           rows.appendChild(tr);
@@ -67,7 +68,7 @@ HTML = """
       }
 
       loadData();
-      setInterval(loadData, 4000);
+      setInterval(loadData, 5000);
     </script>
   </body>
 </html>
@@ -125,11 +126,14 @@ def home():
 
 @app.route("/api/data")
 def data():
+    now = time.time()
+    if _cache["data"] is not None and now - _cache["ts"] < 5:
+        return jsonify(_cache["data"])
+
     try:
         drivers = api_get("/drivers", {"session_key": "latest"})
         positions = api_get("/position", {"session_key": "latest"})
         intervals = api_get("/intervals", {"session_key": "latest"})
-        sessions = api_get("/sessions", {"session_key": "latest"})
 
         driver_map = {}
         for d in drivers if isinstance(drivers, list) else []:
@@ -158,26 +162,26 @@ def data():
             gap = iv.get("gap_to_leader") or iv.get("interval") or ""
             rows.append({
                 "position": p.get("position"),
-                "first_name": d.get("first_name") or d.get("broadcast_name") or "",
+                "last_name": d.get("last_name") or d.get("broadcast_name") or "",
                 "gap": fmt_gap(gap)
             })
 
         rows = sorted(rows, key=lambda x: x["position"] if x["position"] is not None else 999)
 
-        session_name = "latest"
-        if isinstance(sessions, list) and sessions:
-            s0 = sessions[0]
-            session_name = s0.get("session_name") or "latest"
-
-        return jsonify({
+        payload = {
             "ok": True,
-            "year": 2026,
-            "session": session_name,
+            "session": "latest",
             "rows": rows
-        })
+        }
+        _cache["ts"] = now
+        _cache["data"] = payload
+        return jsonify(payload)
 
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e), "rows": []})
+        payload = {"ok": False, "error": str(e), "rows": []}
+        _cache["ts"] = now
+        _cache["data"] = payload
+        return jsonify(payload)
 
 if __name__ == "__main__":
     app.run()

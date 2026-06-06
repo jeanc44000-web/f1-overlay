@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>F1 Overlay</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <div class="panel">
+    <div class="header">
+      <div class="brand">F1 LIVE TIMING</div>
+      <div id="meeting" class="meeting">Chargement...</div>
+      <div id="session" class="session">Veuillez patienter...</div>
+    </div>
+    <div class="board">
+      <div class="head">
+        <div>#</div><div>Pilote</div><div>Temps</div><div>Écart</div>
+      </div>
+      <div id="rows"></div>
+    </div>
+  </div>
+  <script src="{{ url_for('static', filename='overlay.js') }}"></script>
+</body>
+</html>

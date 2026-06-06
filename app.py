@@ -97,8 +97,8 @@ def pick_session():
         return None
 
     now = datetime.now(timezone.utc)
+    allowed = {"FP1", "FP2", "FP3", "Qualifying", "Sprint Qualifying", "Sprint", "Race"}
 
-    # 1) Priorité à la session la plus récente / la plus proche
     candidates = []
     for s in sessions:
         start = parse_dt(s.get("date_start"))
@@ -106,11 +106,9 @@ def pick_session():
             continue
 
         name = (s.get("session_name") or "").strip()
-        allowed = {"FP1", "FP2", "FP3", "Qualifying", "Sprint Qualifying", "Sprint", "Race"}
         if name not in allowed:
             continue
 
-        # Fenêtre large: 60 min avant, 6h après
         live_start = start - timedelta(minutes=60)
         end = parse_dt(s.get("date_end"))
         live_end = (end + timedelta(minutes=60)) if end else (start + timedelta(hours=6))
@@ -126,7 +124,6 @@ def pick_session():
         ))
         return candidates[-1]
 
-    # 2) Sinon on prend la prochaine session du jour la plus proche
     future = []
     for s in sessions:
         start = parse_dt(s.get("date_start"))
@@ -182,6 +179,7 @@ def fetch_live_rows(session_key):
             "position": p.get("position"),
             "last_name": d.get("last_name") or d.get("broadcast_name") or "",
             "team_name": d.get("team_name") or "",
+            "team_color": d.get("team_colour") or d.get("team_color") or "",
             "gap": fmt_gap(gap),
         })
 

@@ -28,23 +28,24 @@ HTML = """
   <link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
   <style>
     :root{
-      --bg:#000000;
-      --panel:#0b0b0b;
-      --line:rgba(255,255,255,.08);
       --text:#ffffff;
-      --muted:rgba(255,255,255,.65);
+      --muted:rgba(255,255,255,.7);
+      --bg:rgba(0,0,0,0);
+      --panel:rgba(10,10,10,.78);
+      --line:rgba(255,255,255,.08);
       --audi:#ba0000;
       --cadillac:#ffffff;
     }
     *{box-sizing:border-box}
-    html,body{margin:0;padding:0;background:#000;color:var(--text);font-family:'Anton',sans-serif;overflow:hidden}
+    html,body{margin:0;padding:0;background:transparent;color:var(--text);font-family:'Anton',sans-serif;overflow:hidden}
     body{padding:14px;text-transform:uppercase}
-    .wrap{width:560px}
+    .wrap{width:560px;background:transparent}
     .top{
       display:flex;justify-content:space-between;align-items:center;
-      padding:16px 18px;margin-bottom:12px;background:linear-gradient(135deg, #111, #050505);
+      padding:16px 18px;margin-bottom:12px;background:var(--panel);
       border:1px solid var(--line);border-radius:18px;
-      box-shadow:0 16px 36px rgba(0,0,0,.45);
+      box-shadow:0 16px 36px rgba(0,0,0,.35);
+      backdrop-filter:blur(18px);
     }
     .eyebrow{
       font-size:12px;letter-spacing:.22em;color:var(--muted);
@@ -61,7 +62,8 @@ HTML = """
     .status.off{background:#f39c12;box-shadow:0 0 18px rgba(243,156,18,.7)}
     .table{
       background:var(--panel);border:1px solid var(--line);border-radius:18px;overflow:hidden;
-      box-shadow:0 16px 36px rgba(0,0,0,.45);
+      box-shadow:0 16px 36px rgba(0,0,0,.35);
+      backdrop-filter:blur(18px);
     }
     table{width:100%;border-collapse:collapse}
     thead th{
@@ -184,7 +186,7 @@ def api_get(path, params=None):
     r = requests.get(
         f"{API_BASE}{path}",
         params=params or {},
-        headers={"accept": "application/json","Authorization": f"Bearer {token}"},
+        headers={"accept": "application/json", "Authorization": f"Bearer {token}"},
         timeout=20,
     )
     if r.status_code == 404:

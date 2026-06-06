@@ -27,9 +27,7 @@ HTML = """
       table { border-collapse: collapse; width: 100%; max-width: 700px; }
       th, td { padding: 10px; border-bottom: 1px solid #333; text-align: left; }
       th { background: #222; }
-      .gap { color: #ddd; text-align: right; }
-      .pos { width: 60px; }
-      .name { width: 220px; }
+      .gap { text-align: right; }
     </style>
   </head>
   <body>
@@ -38,20 +36,15 @@ HTML = """
     <table>
       <thead>
         <tr>
-          <th class="pos">Pos</th>
-          <th class="name">Pilote</th>
-          <th class="gap">Gap</th>
+          <th>Pos</th>
+          <th>Pilote</th>
+          <th>Gap</th>
         </tr>
       </thead>
       <tbody id="rows"></tbody>
     </table>
 
     <script>
-      function formatGap(v) {
-        if (v === null || v === undefined || v === "") return "";
-        return String(v);
-      }
-
       async function loadData() {
         const res = await fetch('/api/data');
         const data = await res.json();
@@ -65,9 +58,9 @@ HTML = """
         (data.rows || []).forEach(r => {
           const tr = document.createElement('tr');
           tr.innerHTML = `
-            <td class="pos">${r.position ?? ''}</td>
-            <td class="name">${r.first_name ?? ''} ${r.last_name ?? ''}</td>
-            <td class="gap">${formatGap(r.gap)}</td>
+            <td>${r.position ?? ''}</td>
+            <td>${r.first_name ?? ''}</td>
+            <td class="gap">${r.gap ?? ''}</td>
           `;
           rows.appendChild(tr);
         });
@@ -84,7 +77,6 @@ def get_token():
     global _token, _token_exp
     if _token and time.time() < _token_exp - 60:
         return _token
-
     if not OPENF1_USER or not OPENF1_PASS:
         raise RuntimeError("Missing OPENF1_USER or OPENF1_PASS")
 
@@ -119,19 +111,33 @@ def api_get(path, params=None):
     except Exception:
         return []
 
-def pick_latest_session():
+def pick_latest_relevant_session():
+    allowed = {"FP1", "FP2", "FP3", "Qualifying", "Sprint Qualifying", "Sprint", "Race"}
+
     for year in [2026, 2025, 2024]:
         sessions = api_get("/sessions", {"year": year})
-        if isinstance(sessions, list) and sessions:
-            session = sorted(
-                sessions,
-                key=lambda s: (
-                    s.get("date_start") or "",
-                    s.get("date_end") or "",
-                    str(s.get("session_key") or "")
-                )
-            )[-1]
-            return year, session
+        if not isinstance(sessions, list) or not sessions:
+            continue
+
+        filtered = []
+        for s in sessions:
+            name = (s.get("session_name") or "").strip()
+            if name in allowed:
+                filtered.append(s)
+
+        if not filtered:
+            continue
+
+        filtered = sorted(
+            filtered,
+            key=lambda s: (
+                s.get("date_end") or s.get("date_start") or "",
+                s.get("date_start") or "",
+                str(s.get("session_key") or "")
+            )
+        )
+        return year, filtered[-1]
+
     return None, None
 
 @app.route("/")
@@ -141,9 +147,9 @@ def home():
 @app.route("/api/data")
 def data():
     try:
-        year, session = pick_latest_session()
+        year, session = pick_latest_relevant_session()
         if not session:
-            return jsonify({"ok": False, "error": "No sessions found", "rows": []})
+            return jsonify({"ok": False, "error": "No relevant sessions found", "rows": []})
 
         session_key = session.get("session_key")
         drivers = api_get("/drivers", {"session_key": session_key})
@@ -174,12 +180,12 @@ def data():
         for dn, p in latest_pos.items():
             d = driver_map.get(dn, {})
             iv = latest_interval.get(dn, {})
+            gap = iv.get("gap_to_leader") or iv.get("interval") or ""
             rows.append({
                 "position": p.get("position"),
                 "driver_number": dn,
-                "first_name": d.get("first_name") or "",
-                "last_name": d.get("last_name") or "",
-                "gap": iv.get("gap_to_leader") or iv.get("interval") or iv.get("gap") or ""
+                "first_name": d.get("first_name") or d.get("broadcast_name") or "",
+                "gap": gap
             })
 
         rows = sorted(rows, key=lambda x: x["position"] if x["position"] is not None else 999)

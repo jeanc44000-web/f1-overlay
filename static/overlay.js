@@ -5,9 +5,9 @@ const sessionEl = document.getElementById("session");
 function render(rows) {
   rowsEl.innerHTML = "";
   rows.forEach((r, i) => {
-    const d = document.createElement("div");
-    d.className = "row" + (i === 0 ? " leader" : "");
-    d.innerHTML = `
+    const row = document.createElement("div");
+    row.className = "row" + (i === 0 ? " leader" : "");
+    row.innerHTML = `
       <div class="pos">${r.pos}</div>
       <div class="driver">
         <span class="dot" style="background:${r.color}"></span>
@@ -16,7 +16,7 @@ function render(rows) {
       <div class="time">${r.time_text}</div>
       <div class="gap">${r.gap_text}</div>
     `;
-    rowsEl.appendChild(d);
+    rowsEl.appendChild(row);
   });
 }
 

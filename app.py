@@ -126,29 +126,10 @@ def home():
 @app.route("/api/data")
 def data():
     try:
-        sessions = api_get("/sessions", {"year": 2026})
-        if not isinstance(sessions, list) or not sessions:
-            return jsonify({"ok": False, "error": "No sessions found", "rows": []})
-
-        allowed = {"FP1", "FP2", "FP3", "Qualifying", "Sprint Qualifying", "Sprint", "Race"}
-        filtered = [s for s in sessions if (s.get("session_name") or "").strip() in allowed]
-        if not filtered:
-            return jsonify({"ok": False, "error": "No relevant sessions found", "rows": []})
-
-        filtered = sorted(
-            filtered,
-            key=lambda s: (
-                s.get("date_start") or "",
-                s.get("date_end") or "",
-                str(s.get("session_key") or "")
-            )
-        )
-        session = filtered[-1]
-        session_key = session.get("session_key")
-
-        drivers = api_get("/drivers", {"session_key": session_key})
-        positions = api_get("/position", {"session_key": session_key})
-        intervals = api_get("/intervals", {"session_key": session_key})
+        drivers = api_get("/drivers", {"session_key": "latest"})
+        positions = api_get("/position", {"session_key": "latest"})
+        intervals = api_get("/intervals", {"session_key": "latest"})
+        sessions = api_get("/sessions", {"session_key": "latest"})
 
         driver_map = {}
         for d in drivers if isinstance(drivers, list) else []:
@@ -177,18 +158,21 @@ def data():
             gap = iv.get("gap_to_leader") or iv.get("interval") or ""
             rows.append({
                 "position": p.get("position"),
-                "driver_number": dn,
                 "first_name": d.get("first_name") or d.get("broadcast_name") or "",
                 "gap": fmt_gap(gap)
             })
 
         rows = sorted(rows, key=lambda x: x["position"] if x["position"] is not None else 999)
 
+        session_name = "latest"
+        if isinstance(sessions, list) and sessions:
+            s0 = sessions[0]
+            session_name = s0.get("session_name") or "latest"
+
         return jsonify({
             "ok": True,
             "year": 2026,
-            "session": session.get("session_name"),
-            "session_key": session_key,
+            "session": session_name,
             "rows": rows
         })
 

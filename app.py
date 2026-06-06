@@ -4,8 +4,10 @@ from datetime import datetime, timezone, timedelta
 
 import requests
 from flask import Flask, jsonify
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 OPENF1_USER = os.getenv("OPENF1_USER")
 OPENF1_PASS = os.getenv("OPENF1_PASS")
@@ -94,7 +96,6 @@ def pick_current_session():
         end = parse_dt(s.get("date_end"))
         if not start:
             continue
-
         live_start = start - timedelta(minutes=30)
         live_end = (end + timedelta(minutes=30)) if end else (start + timedelta(hours=6))
         if live_start <= now <= live_end:
@@ -169,14 +170,12 @@ def data():
             if gap in (None, ""):
                 gap = iv.get("interval")
 
-            rows.append(
-                {
-                    "position": p.get("position"),
-                    "last_name": d.get("last_name") or d.get("broadcast_name") or "",
-                    "team_name": d.get("team_name") or "",
-                    "gap": fmt_gap(gap),
-                }
-            )
+            rows.append({
+                "position": p.get("position"),
+                "last_name": d.get("last_name") or d.get("broadcast_name") or "",
+                "team_name": d.get("team_name") or "",
+                "gap": fmt_gap(gap),
+            })
 
         rows = sorted(rows, key=lambda x: x["position"] if x["position"] is not None else 999)
 

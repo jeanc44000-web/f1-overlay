@@ -1,28 +1,21 @@
-import asyncio
 import json
 import os
-import threading
 import time
 from datetime import datetime, timezone
 
 import requests
-import websockets
 from flask import Flask, Response, render_template
+from signalrcore.hub_connection_builder import HubConnectionBuilder
 
 app = Flask(__name__)
 
-F1_NEGOTIATE_URL = (
-    "https://livetiming.formula1.com/signalrcore/negotiate?negotiateVersion=1"
-)
-
 F1_HUB_URL = "wss://livetiming.formula1.com/signalrcore"
+OPENF1_URL = "https://api.openf1.org/v1"
 
 F1_API_KEY = os.getenv(
     "F1_API_KEY",
     "JJXYS7ilZM7FYIGDXIN3tc2aTqTIaFqd",
 )
-
-OPENF1_URL = "https://api.openf1.org/v1"
 
 TOPICS = [
     "Heartbeat",
@@ -298,6 +291,22 @@ def handle_topic(topic, payload):
     state["last_update"] = time.time()
 
 
+def on_streaming(arguments):
+    if len(arguments) < 2:
+        return
+
+    topic = arguments[0]
+    payload = arguments[1]
+
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+
+    handle_topic(topic, payload)
+
+
 def snapshot():
     drivers = []
 
@@ -349,133 +358,65 @@ def snapshot():
     }
 
 
-def build_headers():
+def start_f1_connection():
     token = os.getenv("F1TV_TOKEN", "").strip()
 
-    headers = {
-        "apikey": F1_API_KEY,
-        "CD-SystemID": "60a9ad84-e93d-480f-80d6-af37494f2e22",
-        "CD-DeviceType": "4",
-        "CD-DistributionChannel": "95d6cc7d-63fe-453b-b734-1cde4fa3d08c",
-        "CD-Language": "en-US",
-        "Origin": "https://f1tv.formula1.com",
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/148.0.0.0 Safari/537.36"
-        ),
+    options = {
+        "verify_ssl": True,
+        "headers": {
+            "apikey": F1_API_KEY,
+            "CD-SystemID": "60a9ad84-e93d-480f-80d6-af37494f2e22",
+            "CD-DeviceType": "4",
+            "CD-DistributionChannel": (
+                "95d6cc7d-63fe-453b-b734-1cde4fa3d08c"
+            ),
+            "CD-Language": "en-US",
+            "Origin": "https://f1tv.formula1.com",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/148.0.0.0 Safari/537.36"
+            ),
+        },
     }
 
     if token:
-        headers["Authorization"] = f"Bearer {token}"
+        options["access_token_factory"] = lambda: token
 
-    return headers
+    hub = (
+        HubConnectionBuilder()
+        .with_url(F1_HUB_URL, options=options)
+        .with_automatic_reconnect({
+            "type": "raw",
+            "keep_alive_interval": 10,
+            "reconnect_interval": 5,
+            "max_reconnect_attempts": 999,
+        })
+        .build()
+    )
 
+    hub.on("Streaming", on_streaming)
 
-async def signalr_loop():
-    while True:
-        try:
-            headers = build_headers()
+    hub.on_open(lambda: (
+        state.update({
+            "connected": True,
+            "last_error": "",
+        })
+    ))
 
-            response = requests.post(
-                F1_NEGOTIATE_URL,
-                headers=headers,
-                timeout=20,
-            )
+    hub.on_close(lambda: state.update({
+        "connected": False,
+    }))
 
-            if response.status_code != 200:
-                state["connected"] = False
-                state["last_error"] = (
-                    f"Negotiate failed: {response.status_code}"
-                )
-                await asyncio.sleep(10)
-                continue
+    hub.on_error(lambda error: state.update({
+        "connected": False,
+        "last_error": str(error),
+    }))
 
-            negotiation = response.json()
-
-            connection_id = negotiation["connectionId"]
-            access_token = negotiation.get("accessToken", "")
-
-            websocket_headers = dict(headers)
-
-            if access_token:
-                websocket_headers["Authorization"] = (
-                    f"Bearer {access_token}"
-                )
-
-            websocket_url = (
-                f"{F1_HUB_URL}?id={connection_id}&negotiateVersion=1"
-            )
-
-            async with websockets.connect(
-                websocket_url,
-                extra_headers=websocket_headers,
-                ping_interval=10,
-                ping_timeout=20,
-            ) as websocket:
-                handshake = json.dumps({
-                    "protocol": "json",
-                    "version": 1,
-                }) + "\x1e"
-
-                await websocket.send(handshake)
-
-                subscribe = json.dumps({
-                    "arguments": [TOPICS],
-                    "target": "Subscribe",
-                    "type": 1,
-                }) + "\x1e"
-
-                await websocket.send(subscribe)
-
-                state["connected"] = True
-                state["last_error"] = ""
-
-                async for raw in websocket:
-                    for message in raw.split("\x1e"):
-                        if not message:
-                            continue
-
-                        try:
-                            decoded = json.loads(message)
-                        except json.JSONDecodeError:
-                            continue
-
-                        if decoded.get("type") != 1:
-                            continue
-
-                        if decoded.get("target") != "Streaming":
-                            continue
-
-                        arguments = decoded.get("arguments", [])
-
-                        if len(arguments) < 2:
-                            continue
-
-                        topic = arguments[0]
-                        payload = arguments[1]
-
-                        if isinstance(payload, str):
-                            try:
-                                payload = json.loads(payload)
-                            except json.JSONDecodeError:
-                                continue
-
-                        handle_topic(topic, payload)
-
-        except Exception as error:
-            state["connected"] = False
-            state["last_error"] = str(error)
-            await asyncio.sleep(10)
+    hub.start()
 
 
-def start_background_loop():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(signalr_loop())
-
-
-threading.Thread(target=start_background_loop, daemon=True).start()
+start_f1_connection()
 
 
 @app.route("/")
@@ -528,7 +469,10 @@ def last_result():
         )
 
         if not sessions:
-            return {"session": {"name": "LAST RACE"}, "drivers": []}
+            return {
+                "session": {"name": "LAST RACE"},
+                "drivers": [],
+            }
 
         last_session = sessions[0]
         session_key = last_session["session_key"]

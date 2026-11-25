@@ -9,17 +9,19 @@
 body {
   background: transparent;
   font-family: "Barlow Condensed", sans-serif;
-  color: #fff;
+  color: #ffffff;
 }
 
 .overlay {
   width: 330px;
   background: #08080a;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-top: 4px solid #222;
+  border-top: 4px solid #1c1c20;
   border-radius: 4px;
   overflow: hidden;
-  transition: border-color 250ms ease, box-shadow 250ms ease;
+  transition:
+    border-color 250ms ease,
+    box-shadow 250ms ease;
 }
 
 .overlay.yellow {
@@ -36,7 +38,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 5px 9px;
+  height: 28px;
+  padding: 0 9px;
   background: #101014;
   border-bottom: 1px solid rgba(255, 255, 255, 0.07);
   font-size: 14px;
@@ -60,15 +63,16 @@ body {
 
 .row {
   display: grid;
-  grid-template-columns: 24px 52px 1fr 26px;
+  grid-template-columns: 24px 52px 1fr 24px;
   align-items: center;
   gap: 5px;
   height: 23px;
   padding: 0 8px;
   background: #0b0b0e;
   border-bottom: 1px solid rgba(255, 255, 255, 0.045);
-  transition: transform 350ms cubic-bezier(0.22, 0.61, 0.36, 1),
-              background-color 250ms ease;
+  transition:
+    transform 350ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    background-color 250ms ease;
 }
 
 .row.gained {
@@ -79,8 +83,8 @@ body {
   animation: lost 900ms ease;
 }
 
-.row.eliminated .tla,
-.row.eliminated .position {
+.row.eliminated .position,
+.row.eliminated .tla {
   color: #ff4b4b !important;
 }
 
@@ -88,6 +92,7 @@ body {
   0% {
     background-color: rgba(255, 255, 255, 0.10);
   }
+
   100% {
     background-color: transparent;
   }
@@ -97,6 +102,7 @@ body {
   0% {
     background-color: rgba(255, 70, 70, 0.12);
   }
+
   100% {
     background-color: transparent;
   }
@@ -131,12 +137,12 @@ body {
   justify-content: center;
   font-size: 10px;
   font-weight: 800;
-  color: #000;
+  color: #000000;
 }
 
 .tyre.s {
   background: #ff1e1e;
-  color: #fff;
+  color: #ffffff;
 }
 
 .tyre.m {
@@ -149,10 +155,10 @@ body {
 
 .tyre.i {
   background: #2fbf4f;
-  color: #fff;
+  color: #ffffff;
 }
 
 .tyre.w {
   background: #2f7bff;
-  color: #fff;
+  color: #ffffff;
 }

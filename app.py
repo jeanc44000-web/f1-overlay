@@ -1,248 +1,418 @@
+import asyncio
+import json
 import os
+import threading
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 import requests
-from flask import Flask, jsonify, make_response
+import websockets
+from flask import Flask, Response, render_template
 
 app = Flask(__name__)
 
-OPENF1_USER = os.getenv("OPENF1_USER")
-OPENF1_PASS = os.getenv("OPENF1_PASS")
+F1_NEGOTIATE_URL = "https://livetiming.formula1.com/signalrcore/negotiate?negotiateVersion=1"
+F1_HUB_URL = "wss://livetiming.formula1.com/signalrcore"
 
-TOKEN_URL = "https://api.openf1.org/token"
-API_BASE = "https://api.openf1.org/v1"
+TOPICS = [
+    "Heartbeat",
+    "SessionInfo",
+    "SessionData",
+    "SessionStatus",
+    "DriverList",
+    "TimingData",
+    "TimingAppData",
+    "TrackStatus",
+]
 
-_token = None
-_token_exp = 0
-_cache = {"ts": 0, "data": None}
+TEAM_COLORS = {
+    "McLaren": "#ff8000",
+    "Ferrari": "#e8002d",
+    "Red Bull": "#1e2a62",
+    "Mercedes": "#00d2be",
+    "Aston Martin": "#00665e",
+    "Alpine": "#0093cc",
+    "Williams": "#1868db",
+    "Racing Bulls": "#6692ff",
+    "Haas": "#b6babd",
+    "Audi": "#bb0a30",
+    "Cadillac": "#ececec",
+}
+
+FALLBACK_TEAM_BY_TLA = {
+    "NOR": "McLaren", "PIA": "McLaren",
+    "LEC": "Ferrari", "HAM": "Ferrari",
+    "VER": "Red Bull", "HAD": "Red Bull",
+    "RUS": "Mercedes", "ANT": "Mercedes",
+    "ALO": "Aston Martin", "STR": "Aston Martin",
+    "GAS": "Alpine", "COL": "Alpine",
+    "ALB": "Williams", "SAI": "Williams",
+    "LAW": "Racing Bulls", "TSU": "Racing Bulls",
+    "OCO": "Haas", "CAM": "Haas",
+    "HUL": "Audi", "BOR": "Audi",
+    "PER": "Cadillac", "BOT": "Cadillac",
+}
+
+state = {
+    "session": {
+        "name": "NO SESSION",
+        "status": "INACTIVE",
+        "phase": "",
+        "time_remaining": "",
+        "current_lap": "",
+        "total_laps": "",
+    },
+    "track": {
+        "status": "GREEN",
+        "label": "",
+        "sector": "",
+    },
+    "drivers": {},
+    "server_time": "",
+    "connected": False,
+    "last_update": 0,
+}
+
+subscribers = []
 
 
-def cors_json(payload, status=200):
-    resp = make_response(jsonify(payload), status)
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-    return resp
+def normalize_team(team_name, tla):
+    team_name = (team_name or "").strip()
+
+    for known, color in TEAM_COLORS.items():
+        if known.lower() in team_name.lower():
+            return known, color
+
+    fallback = FALLBACK_TEAM_BY_TLA.get(tla)
+    if fallback:
+        return fallback, TEAM_COLORS[fallback]
+
+    return team_name or "F1", "#9aa0a6"
 
 
-def get_token():
-    global _token, _token_exp
-    if _token and time.time() < _token_exp - 60:
-        return _token
-    if not OPENF1_USER or not OPENF1_PASS:
-        raise RuntimeError("Missing OPENF1_USER or OPENF1_PASS")
-
-    r = requests.post(
-        TOKEN_URL,
-        data={"username": OPENF1_USER, "password": OPENF1_PASS},
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        timeout=20,
-    )
-    r.raise_for_status()
-    data = r.json()
-    _token = data["access_token"]
-    _token_exp = time.time() + int(data.get("expires_in", 3600))
-    return _token
-
-
-def api_get(path, params=None):
-    token = get_token()
-    r = requests.get(
-        f"{API_BASE}{path}",
-        params=params or {},
-        headers={
-            "accept": "application/json",
-            "Authorization": f"Bearer {token}",
-        },
-        timeout=20,
-    )
-    if r.status_code == 404:
-        return []
-    if r.status_code == 429:
-        raise RuntimeError("OpenF1 rate limit hit")
-    r.raise_for_status()
-    try:
-        return r.json()
-    except Exception:
-        return []
-
-
-def fmt_gap(x):
-    if x is None or x == "":
+def clean_gap(value):
+    if not value:
         return ""
-    if isinstance(x, (int, float)):
-        return f"+{x:.3f}" if x >= 0 else f"{x:.3f}"
-    s = str(x).strip()
-    return s if s.startswith("+") or s.startswith("-") else f"+{s}"
+    return str(value).replace("+", "").strip()
 
 
-def parse_dt(s):
-    if not s:
-        return None
-    try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except Exception:
-        return None
+def apply_patch(target, patch):
+    if not isinstance(patch, dict):
+        return
+
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            apply_patch(target[key], value)
+        else:
+            target[key] = value
 
 
-def sessions_for_year(year=2026):
-    sessions = api_get("/sessions", {"year": year})
-    return sessions if isinstance(sessions, list) else []
+def update_driver_list(data):
+    if not isinstance(data, dict):
+        return
 
+    for number, info in data.items():
+        driver = state["drivers"].setdefault(str(number), {})
 
-def pick_session():
-    sessions = sessions_for_year(2026)
-    if not sessions:
-        return None
+        tla = info.get("Tla") or info.get("TLA") or driver.get("tla", "")
+        team_name = info.get("TeamName") or info.get("Team") or driver.get("team", "")
+        team, color = normalize_team(team_name, tla)
 
-    now = datetime.now(timezone.utc)
-    allowed = {"FP1", "FP2", "FP3", "Qualifying", "Sprint Qualifying", "Sprint", "Race"}
-
-    candidates = []
-    for s in sessions:
-        start = parse_dt(s.get("date_start"))
-        if not start:
-            continue
-        name = (s.get("session_name") or "").strip()
-        if name not in allowed:
-            continue
-        live_start = start - timedelta(minutes=60)
-        end = parse_dt(s.get("date_end"))
-        live_end = (end + timedelta(minutes=60)) if end else (start + timedelta(hours=6))
-        if live_start <= now <= live_end:
-            candidates.append(s)
-
-    if candidates:
-        candidates.sort(key=lambda s: (s.get("date_start") or "", s.get("date_end") or "", str(s.get("session_key") or "")))
-        return candidates[-1]
-
-    future = []
-    for s in sessions:
-        start = parse_dt(s.get("date_start"))
-        if not start:
-            continue
-        if start >= now - timedelta(hours=6):
-            future.append(s)
-
-    if future:
-        future.sort(key=lambda s: parse_dt(s.get("date_start")) or datetime.max.replace(tzinfo=timezone.utc))
-        return future[0]
-
-    return None
-
-
-def fetch_live_rows(session_key):
-    drivers = api_get("/drivers", {"session_key": session_key})
-    positions = api_get("/position", {"session_key": session_key})
-    intervals = api_get("/intervals", {"session_key": session_key})
-
-    driver_map = {}
-    for d in drivers if isinstance(drivers, list) else []:
-        dn = d.get("driver_number")
-        if dn is not None:
-            driver_map[int(dn)] = d
-
-    latest_pos = {}
-    for p in positions if isinstance(positions, list) else []:
-        dn = p.get("driver_number")
-        if dn is None:
-            continue
-        latest_pos[int(dn)] = p
-
-    latest_interval = {}
-    for i in intervals if isinstance(intervals, list) else []:
-        dn = i.get("driver_number")
-        if dn is None:
-            continue
-        latest_interval[int(dn)] = i
-
-    rows = []
-    for dn, p in latest_pos.items():
-        d = driver_map.get(dn, {})
-        iv = latest_interval.get(dn, {})
-
-        gap = iv.get("gap_to_leader")
-        if gap in (None, ""):
-            gap = iv.get("interval_to_position_ahead")
-        if gap in (None, ""):
-            gap = iv.get("interval")
-        if gap in (None, "") and p.get("position") not in (None, 1):
-            gap = ""
-
-        rows.append({
-            "position": p.get("position"),
-            "last_name": d.get("last_name") or d.get("broadcast_name") or "",
-            "team_name": d.get("team_name") or "",
-            "team_color": d.get("team_colour") or d.get("team_color") or "",
-            "gap": fmt_gap(gap),
+        driver.update({
+            "number": str(number),
+            "tla": tla,
+            "team": team,
+            "team_color": info.get("TeamColour") or color,
+            "full_name": info.get("FirstName", "") + " " + info.get("LastName", ""),
         })
 
-    rows.sort(key=lambda x: x["position"] if x["position"] is not None else 999)
-    return rows
+
+def update_timing_data(data):
+    if not isinstance(data, dict):
+        return
+
+    for number, info in data.items():
+        driver = state["drivers"].setdefault(str(number), {})
+        apply_patch(driver, info)
+
+        driver["position"] = driver.get("Position", driver.get("position", ""))
+        driver["interval"] = clean_gap(driver.get("Interval", driver.get("interval", "")))
+        driver["gap"] = clean_gap(driver.get("GapToLeader", driver.get("gap", "")))
+        driver["lap"] = driver.get("NumberOfLaps", driver.get("lap", ""))
+
+
+def update_tyres(data):
+    if not isinstance(data, dict):
+        return
+
+    for number, info in data.items():
+        driver = state["drivers"].setdefault(str(number), {})
+        tyres = info.get("Stints")
+
+        if isinstance(tyres, list) and tyres:
+            last = tyres[-1]
+            compound = last.get("Compound", "")
+            driver["tyre"] = compound[:1].upper() if compound else driver.get("tyre", "")
+
+
+def update_session_info(data):
+    if not isinstance(data, dict):
+        return
+
+    meeting = data.get("Meeting", {})
+    session_name = data.get("Name", "")
+
+    name_map = {
+        "Practice 1": "FP1",
+        "Practice 2": "FP2",
+        "Practice 3": "FP3",
+        "Qualifying": "QUALI",
+        "Qualifying 1": "Q1",
+        "Qualifying 2": "Q2",
+        "Qualifying 3": "Q3",
+        "Race": "RACE",
+        "Sprint": "SPRINT",
+    }
+
+    state["session"]["name"] = name_map.get(session_name, session_name.upper() or "NO SESSION")
+
+
+def update_session_data(data):
+    if not isinstance(data, dict):
+        return
+
+    status = data.get("Status", "")
+    phase = data.get("Phase", "")
+
+    state["session"]["status"] = status or state["session"]["status"]
+    state["session"]["phase"] = phase or state["session"]["phase"]
+
+    remaining = data.get("RemainingTime") or data.get("Clock", {}).get("Remaining", "")
+    if remaining:
+        state["session"]["time_remaining"] = remaining
+
+
+def update_track_status(data):
+    if not isinstance(data, dict):
+        return
+
+    status = str(data.get("Status", "1"))
+    message = data.get("Message", "")
+
+    mapping = {
+        "1": ("GREEN", "", ""),
+        "2": ("YELLOW", "YELLOW FLAG", ""),
+        "4": ("YELLOW", "SAFETY CAR", ""),
+        "6": ("YELLOW", "VSC", ""),
+        "7": ("RED", "RED FLAG", ""),
+    }
+
+    track_status, label, sector = mapping.get(status, ("GREEN", message.upper(), ""))
+
+    if "Sector 1" in message:
+        sector = "SECTOR 1"
+    elif "Sector 2" in message:
+        sector = "SECTOR 2"
+    elif "Sector 3" in message:
+        sector = "SECTOR 3"
+
+    state["track"] = {
+        "status": track_status,
+        "label": label,
+        "sector": sector,
+    }
+
+
+def handle_topic(topic, payload):
+    if topic == "DriverList":
+        update_driver_list(payload)
+    elif topic == "TimingData":
+        update_timing_data(payload)
+    elif topic == "TimingAppData":
+        update_tyres(payload)
+    elif topic == "SessionInfo":
+        update_session_info(payload)
+    elif topic == "SessionData":
+        update_session_data(payload)
+    elif topic == "SessionStatus":
+        state["session"]["status"] = str(payload)
+    elif topic == "TrackStatus":
+        update_track_status(payload)
+
+    state["last_update"] = time.time()
+
+
+def snapshot():
+    drivers = []
+
+    for driver in state["drivers"].values():
+        if not driver.get("tla"):
+            continue
+
+        drivers.append({
+            "position": driver.get("position") or 99,
+            "tla": driver.get("tla", ""),
+            "team": driver.get("team", ""),
+            "team_color": driver.get("team_color", "#9aa0a6"),
+            "interval": driver.get("interval", ""),
+            "gap": driver.get("gap", ""),
+            "tyre": driver.get("tyre", ""),
+            "lap": driver.get("lap", ""),
+            "status": driver.get("status", ""),
+            "knocked_out": bool(driver.get("KnockedOut", False)),
+        })
+
+    drivers.sort(key=lambda d: int(d["position"]) if str(d["position"]).isdigit() else 999)
+
+    session_name = state["session"]["name"]
+    phase = state["session"]["phase"].upper()
+
+    if phase in ("Q1", "Q2"):
+        cutoff = 15 if phase == "Q1" else 10
+        for driver in drivers:
+            if int(driver["position"]) > cutoff:
+                driver["eliminated"] = True
+
+    for driver in drivers:
+        driver.setdefault("eliminated", driver["knocked_out"])
+
+    return {
+        "session": state["session"],
+        "track": state["track"],
+        "drivers": drivers,
+        "server_time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+        "connected": state["connected"],
+    }
+
+
+async def signalr_loop():
+    headers = {}
+
+    token = os.getenv("F1TV_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    while True:
+        try:
+            response = requests.post(
+                F1_NEGOTIATE_URL,
+                headers=headers,
+                timeout=15,
+            )
+            response.raise_for_status()
+            negotiation = response.json()
+
+            connection_id = negotiation["connectionId"]
+            access_token = negotiation.get("accessToken", "")
+
+            ws_headers = dict(headers)
+            if access_token:
+                ws_headers["Authorization"] = f"Bearer {access_token}"
+
+            ws_url = (
+                f"{F1_HUB_URL}?id={connection_id}"
+                "&negotiateVersion=1"
+            )
+
+            async with websockets.connect(
+                ws_url,
+                additional_headers=ws_headers,
+                ping_interval=10,
+                ping_timeout=20,
+            ) as websocket:
+                handshake = json.dumps({
+                    "protocol": "json",
+                    "version": 1,
+                }) + "\x1e"
+
+                await websocket.send(handshake)
+
+                subscribe = json.dumps({
+                    "arguments": [TOPICS],
+                    "target": "Subscribe",
+                    "type": 1,
+                }) + "\x1e"
+
+                await websocket.send(subscribe)
+
+                state["connected"] = True
+
+                async for raw in websocket:
+                    for message in raw.split("\x1e"):
+                        if not message:
+                            continue
+
+                        try:
+                            decoded = json.loads(message)
+                        except json.JSONDecodeError:
+                            continue
+
+                        if decoded.get("type") != 1:
+                            continue
+
+                        target = decoded.get("target", "")
+
+                        if target != "Streaming":
+                            continue
+
+                        arguments = decoded.get("arguments", [])
+
+                        if len(arguments) < 2:
+                            continue
+
+                        topic = arguments[0]
+                        payload = arguments[1]
+
+                        if isinstance(payload, str):
+                            try:
+                                payload = json.loads(payload)
+                            except json.JSONDecodeError:
+                                continue
+
+                        handle_topic(topic, payload)
+
+        except Exception:
+            state["connected"] = False
+            await asyncio.sleep(5)
+
+
+def start_background_loop():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(signalr_loop())
+
+
+threading.Thread(target=start_background_loop, daemon=True).start()
 
 
 @app.route("/")
-def home():
-    return cors_json({"ok": True, "message": "OpenF1 overlay backend", "endpoint": "/api/data"})
+def index():
+    return render_template("index.html")
 
 
-@app.route("/api/data", methods=["GET", "OPTIONS"])
-def data():
-    now = time.time()
-    tick = int(now // 5) % 3
+@app.route("/api/stream")
+def stream():
+    def generate():
+        last_payload = None
 
-    if _cache["data"] is not None and now - _cache["ts"] < 5:
-        return cors_json(_cache["data"])
+        while True:
+            current = snapshot()
+            encoded = json.dumps(current, separators=(",", ":"))
 
-    try:
-        session = pick_session()
+            if encoded != last_payload:
+                yield f"data: {encoded}\n\n"
+                last_payload = encoded
 
-        if not session:
-            payload = {
-                "ok": False,
-                "error": "aucune séance en cours",
-                "session": "",
-                "tick": tick,
-                "rows": [],
-            }
-            _cache["ts"] = now
-            _cache["data"] = payload
-            return cors_json(payload)
+            time.sleep(0.25)
 
-        session_key = session.get("session_key")
-        rows = fetch_live_rows(session_key)
-
-        payload = {
-            "ok": True,
-            "session": (session.get("session_name") or "SESSION").upper(),
-            "session_key": session_key,
-            "tick": tick,
-            "rows": rows,
-        }
-        _cache["ts"] = now
-        _cache["data"] = payload
-        return cors_json(payload)
-
-    except Exception as e:
-        payload = {
-            "ok": False,
-            "error": str(e),
-            "session": "",
-            "tick": tick,
-            "rows": [],
-        }
-        _cache["ts"] = now
-        _cache["data"] = payload
-        return cors_json(payload)
-
-
-@app.after_request
-def add_cors_headers(resp):
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-    return resp
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 if __name__ == "__main__":

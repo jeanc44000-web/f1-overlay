@@ -1,134 +1,158 @@
-:root {
-  --bg: rgba(10, 12, 18, 0.00);
-  --panel: rgba(18, 22, 31, 0.82);
-  --line: rgba(255, 255, 255, 0.08);
-  --text: #f4f7fb;
-  --muted: rgba(244, 247, 251, 0.68);
-  --audi: #ba0000;
-  --cadillac: #ffffff;
-  --cadillac-dark: #111111;
-}
+@import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&display=swap");
 
 * {
+  margin: 0;
+  padding: 0;
   box-sizing: border-box;
 }
 
-html, body {
-  margin: 0;
-  padding: 0;
+body {
   background: transparent;
-  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: var(--text);
-  overflow: hidden;
+  font-family: "Barlow Condensed", sans-serif;
+  color: #fff;
 }
 
 .overlay {
-  width: 560px;
-  padding: 14px;
-  background: var(--bg);
+  width: 330px;
+  background: #08080a;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 4px solid #222;
+  border-radius: 4px;
+  overflow: hidden;
+  transition: border-color 250ms ease, box-shadow 250ms ease;
+}
+
+.overlay.yellow {
+  border-top-color: #ffd400;
+  box-shadow: inset 0 0 45px rgba(255, 212, 0, 0.16);
+}
+
+.overlay.red {
+  border-top-color: #ff1e1e;
+  box-shadow: inset 0 0 45px rgba(255, 30, 30, 0.18);
 }
 
 .header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
-  padding: 14px 16px;
-  background: linear-gradient(135deg, rgba(186,0,0,0.18), rgba(255,255,255,0.05));
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  backdrop-filter: blur(18px);
-}
-
-.eyebrow {
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin-bottom: 4px;
-}
-
-.title {
-  font-size: 18px;
+  justify-content: space-between;
+  padding: 5px 9px;
+  background: #101014;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 14px;
   font-weight: 700;
-}
-
-.dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 999px;
-  background: #2ecc71;
-  box-shadow: 0 0 18px rgba(46, 204, 113, 0.7);
-}
-
-.tableWrap {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  overflow: hidden;
-  backdrop-filter: blur(18px);
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-thead th {
-  text-align: left;
-  font-size: 11px;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--muted);
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
 }
 
-tbody td {
-  padding: 11px 16px;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-  font-size: 15px;
+#session-name.yellow {
+  color: #ffd400;
 }
 
-tbody tr:last-child td {
-  border-bottom: none;
+#session-name.red {
+  color: #ff4b4b;
 }
 
-.pos {
-  width: 58px;
-  color: rgba(255,255,255,0.86);
+.rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 24px 52px 1fr 26px;
+  align-items: center;
+  gap: 5px;
+  height: 23px;
+  padding: 0 8px;
+  background: #0b0b0e;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+  transition: transform 350ms cubic-bezier(0.22, 0.61, 0.36, 1),
+              background-color 250ms ease;
+}
+
+.row.gained {
+  animation: gained 900ms ease;
+}
+
+.row.lost {
+  animation: lost 900ms ease;
+}
+
+.row.eliminated .tla,
+.row.eliminated .position {
+  color: #ff4b4b !important;
+}
+
+@keyframes gained {
+  0% {
+    background-color: rgba(255, 255, 255, 0.10);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@keyframes lost {
+  0% {
+    background-color: rgba(255, 70, 70, 0.12);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.position {
+  font-size: 14px;
   font-weight: 700;
+  color: #e8e8e8;
+}
+
+.tla {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
 }
 
 .gap {
-  width: 110px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #c9c9c9;
   text-align: right;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.team-audi {
-  border-left: 3px solid var(--audi);
+.tyre {
+  width: 20px;
+  height: 16px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 800;
+  color: #000;
 }
 
-.team-cadillac {
-  border-left: 3px solid var(--cadillac);
+.tyre.s {
+  background: #ff1e1e;
+  color: #fff;
 }
 
-.team-cadillac td {
-  color: var(--cadillac);
+.tyre.m {
+  background: #ffd400;
 }
 
-.empty {
-  margin-top: 12px;
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid var(--line);
-  color: var(--muted);
-  text-align: center;
+.tyre.h {
+  background: #f2f2f2;
 }
 
-.hidden {
-  display: none;
+.tyre.i {
+  background: #2fbf4f;
+  color: #fff;
+}
+
+.tyre.w {
+  background: #2f7bff;
+  color: #fff;
 }

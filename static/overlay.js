@@ -8,6 +8,7 @@ const rowsContainer = document.getElementById("rows");
 
 let previousDrivers = new Map();
 let eventSource = null;
+let latestData = null;
 
 function connect() {
   if (eventSource) {
@@ -16,6 +17,8 @@ function connect() {
 
   loadLastResult();
   startLiveStream();
+
+  setInterval(updateClock, 1000);
 }
 
 function loadLastResult() {
@@ -33,7 +36,8 @@ function startLiveStream() {
   eventSource = new EventSource(API_URL);
 
   eventSource.onmessage = (event) => {
-    render(JSON.parse(event.data));
+    latestData = JSON.parse(event.data);
+    render(latestData);
   };
 
   eventSource.onerror = () => {
@@ -50,30 +54,40 @@ function formatClock() {
   });
 }
 
-function getSessionInfo(data) {
-  const session = data.session;
+function updateClock() {
+  if (!latestData) {
+    sessionInfo.textContent = `NO SESSION  •  ${formatClock()}`;
+    return;
+  }
 
-  if (!data.connected || session.name === "NO SESSION") {
-    return `NO SESSION  •  ${formatClock()}`;
+  const session = latestData.session;
+
+  if (!latestData.connected || session.name === "NO SESSION") {
+    sessionInfo.textContent = `NO SESSION  •  ${formatClock()}`;
+    return;
   }
 
   if (session.name === "RACE") {
     if (session.current_lap && session.total_laps) {
-      return `LAP ${session.current_lap}/${session.total_laps}`;
+      sessionInfo.textContent = `LAP ${session.current_lap}/${session.total_laps}`;
+      return;
     }
 
     if (session.current_lap) {
-      return `LAP ${session.current_lap}`;
+      sessionInfo.textContent = `LAP ${session.current_lap}`;
+      return;
     }
 
-    return formatClock();
+    sessionInfo.textContent = formatClock();
+    return;
   }
 
   if (session.time_remaining) {
-    return `${session.time_remaining}  •  ${formatClock()}`;
+    sessionInfo.textContent = `${session.time_remaining}  •  ${formatClock()}`;
+    return;
   }
 
-  return formatClock();
+  sessionInfo.textContent = formatClock();
 }
 
 function createRow() {
@@ -140,7 +154,7 @@ function render(data) {
   sessionName.classList.toggle("yellow", track.status === "YELLOW");
   sessionName.classList.toggle("red", track.status === "RED");
 
-  sessionInfo.textContent = getSessionInfo(data);
+  updateClock();
 
   rowsContainer.innerHTML = "";
 
@@ -156,9 +170,3 @@ function render(data) {
 }
 
 connect();
-
-setInterval(() => {
-  if (!sessionInfo.textContent.includes("•")) {
-    sessionInfo.textContent = `NO SESSION  •  ${formatClock()}`;
-  }
-}, 1000);

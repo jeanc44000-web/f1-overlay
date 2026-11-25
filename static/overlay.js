@@ -1,3 +1,6 @@
+const API_URL = "https://TON-APP.onrender.com/api/stream";
+const LAST_RESULT_URL = "https://TON-APP.onrender.com/api/last-result";
+
 const overlay = document.getElementById("overlay");
 const sessionName = document.getElementById("session-name");
 const sessionInfo = document.getElementById("session-info");
@@ -11,15 +14,31 @@ function connect() {
     eventSource.close();
   }
 
-  eventSource = new EventSource("/api/stream");
+  loadLastResult();
+  startLiveStream();
+}
+
+function loadLastResult() {
+  fetch(LAST_RESULT_URL)
+    .then((response) => response.json())
+    .then((data) => {
+      if (data.drivers && data.drivers.length > 0) {
+        render(data);
+      }
+    })
+    .catch(() => {});
+}
+
+function startLiveStream() {
+  eventSource = new EventSource(API_URL);
 
   eventSource.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    render(data);
+    render(JSON.parse(event.data));
   };
 
   eventSource.onerror = () => {
-    setTimeout(connect, 2000);
+    eventSource.close();
+    setTimeout(startLiveStream, 2000);
   };
 }
 
@@ -57,7 +76,7 @@ function getSessionInfo(data) {
   return formatClock();
 }
 
-function createRow(driver) {
+function createRow() {
   const row = document.createElement("div");
   row.className = "row";
 
@@ -114,47 +133,32 @@ function render(data) {
   overlay.classList.toggle("yellow", track.status === "YELLOW");
   overlay.classList.toggle("red", track.status === "RED");
 
-  sessionName.textContent =
-    track.label || data.session.name || "NO SESSION";
+  sessionName.textContent = (
+    track.label || data.session.name || "NO SESSION"
+  );
 
   sessionName.classList.toggle("yellow", track.status === "YELLOW");
   sessionName.classList.toggle("red", track.status === "RED");
 
   sessionInfo.textContent = getSessionInfo(data);
 
-  const drivers = data.drivers;
-  const existingRows = new Map();
-
-  for (const child of Array.from(rowsContainer.children)) {
-    existingRows.set(child.dataset.tla, child);
-  }
-
   rowsContainer.innerHTML = "";
 
-  for (const driver of drivers) {
-    const row = existingRows.get(driver.tla) || createRow(driver);
-    row.dataset.tla = driver.tla;
+  for (const driver of data.drivers) {
+    const row = createRow();
+    const previous = previousDrivers.get(driver.tla);
 
-    updateRow(row, driver, previousDrivers.get(driver.tla));
+    updateRow(row, driver, previous);
+
     rowsContainer.appendChild(row);
-
     previousDrivers.set(driver.tla, driver);
   }
 }
 
 connect();
-setInterval(() => {
-  sessionInfo.textContent = getSessionInfo({
-    session: stateSession(),
-    connected: true,
-  });
-}, 1000);
 
-function stateSession() {
-  return {
-    name: sessionName.textContent,
-    time_remaining: "",
-    current_lap: "",
-    total_laps: "",
-  };
-}
+setInterval(() => {
+  if (!sessionInfo.textContent.includes("•")) {
+    sessionInfo.textContent = `NO SESSION  •  ${formatClock()}`;
+  }
+}, 1000);

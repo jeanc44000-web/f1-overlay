@@ -1,4 +1,4 @@
-const API_URL = "https://TON-APP.onrender.com/api/stream";
+const LIVE_URL = "https://TON-APP.onrender.com/api/live";
 const LAST_RESULT_URL = "https://TON-APP.onrender.com/api/last-result";
 
 const overlay = document.getElementById("overlay");
@@ -7,43 +7,55 @@ const sessionInfo = document.getElementById("session-info");
 const rowsContainer = document.getElementById("rows");
 
 let previousDrivers = new Map();
-let eventSource = null;
-let latestData = null;
+let liveConnected = false;
 
-function connect() {
-  if (eventSource) {
-    eventSource.close();
-  }
+function log(message) {
+  console.log("[F1 OVERLAY]", message);
+}
+
+function start() {
+  log("Overlay démarré");
+
+  updateClock();
+  setInterval(updateClock, 1000);
 
   loadLastResult();
-  startLiveStream();
-
-  setInterval(updateClock, 1000);
+  loadLive();
+  setInterval(loadLive, 1000);
 }
 
 function loadLastResult() {
+  log("Chargement de la dernière séance");
+
   fetch(LAST_RESULT_URL)
     .then((response) => response.json())
     .then((data) => {
+      log("Dernière séance reçue");
+
       if (data.drivers && data.drivers.length > 0) {
         render(data);
       }
     })
-    .catch(() => {});
+    .catch((error) => {
+      log(`Erreur dernière séance : ${error}`);
+    });
 }
 
-function startLiveStream() {
-  eventSource = new EventSource(API_URL);
+function loadLive() {
+  fetch(LIVE_URL)
+    .then((response) => response.json())
+    .then((data) => {
+      liveConnected = Boolean(
+        data.connected && data.drivers.length > 0
+      );
 
-  eventSource.onmessage = (event) => {
-    latestData = JSON.parse(event.data);
-    render(latestData);
-  };
-
-  eventSource.onerror = () => {
-    eventSource.close();
-    setTimeout(startLiveStream, 2000);
-  };
+      if (liveConnected) {
+        render(data);
+      }
+    })
+    .catch((error) => {
+      log(`Erreur live : ${error}`);
+    });
 }
 
 function formatClock() {
@@ -55,14 +67,14 @@ function formatClock() {
 }
 
 function updateClock() {
-  if (!latestData) {
+  if (!liveConnected) {
     sessionInfo.textContent = `NO SESSION  •  ${formatClock()}`;
     return;
   }
 
-  const session = latestData.session;
+  const session = latestSession();
 
-  if (!latestData.connected || session.name === "NO SESSION") {
+  if (!session) {
     sessionInfo.textContent = `NO SESSION  •  ${formatClock()}`;
     return;
   }
@@ -90,13 +102,22 @@ function updateClock() {
   sessionInfo.textContent = formatClock();
 }
 
+let latestSessionData = null;
+
+function latestSession() {
+  return latestSessionData;
+}
+
 function createRow() {
   const row = document.createElement("div");
   row.className = "row";
 
   row.innerHTML = `
     <span class="position"></span>
-    <span class="tla"></span>
+    <span class="tla-wrapper">
+      <span class="tla"></span>
+      <span class="pit-badge"></span>
+    </span>
     <span class="gap"></span>
     <span class="tyre"></span>
   `;
@@ -108,6 +129,9 @@ function updateRow(row, driver, previous) {
   row.querySelector(".position").textContent = driver.position;
   row.querySelector(".tla").textContent = driver.tla;
   row.querySelector(".tla").style.color = driver.team_color;
+
+  const pitBadge = row.querySelector(".pit-badge");
+  pitBadge.textContent = driver.pit ? "P" : "";
 
   const gap = driver.interval || driver.gap || "";
 
@@ -142,6 +166,8 @@ function updateRow(row, driver, previous) {
 }
 
 function render(data) {
+  latestSessionData = data.session;
+
   const track = data.track;
 
   overlay.classList.toggle("yellow", track.status === "YELLOW");
@@ -169,4 +195,4 @@ function render(data) {
   }
 }
 
-connect();
+start();

@@ -1,13 +1,13 @@
-const LIVE_URL = "https://TON-APP.onrender.com/api/live";
-const LAST_RESULT_URL = "https://TON-APP.onrender.com/api/last-result";
+const LIVE_URL = "https://f1-overlay.onrender.com/api/live";
 
 const overlay = document.getElementById("overlay");
+const connectionDot = document.getElementById("connection-dot");
 const sessionName = document.getElementById("session-name");
 const sessionInfo = document.getElementById("session-info");
 const rowsContainer = document.getElementById("rows");
 
 let previousDrivers = new Map();
-let liveConnected = false;
+let latestData = null;
 
 function log(message) {
   console.log("[F1 OVERLAY]", message);
@@ -19,39 +19,16 @@ function start() {
   updateClock();
   setInterval(updateClock, 1000);
 
-  loadLastResult();
   loadLive();
   setInterval(loadLive, 1000);
-}
-
-function loadLastResult() {
-  log("Chargement de la dernière séance");
-
-  fetch(LAST_RESULT_URL)
-    .then((response) => response.json())
-    .then((data) => {
-      log("Dernière séance reçue");
-
-      if (data.drivers && data.drivers.length > 0) {
-        render(data);
-      }
-    })
-    .catch((error) => {
-      log(`Erreur dernière séance : ${error}`);
-    });
 }
 
 function loadLive() {
   fetch(LIVE_URL)
     .then((response) => response.json())
     .then((data) => {
-      liveConnected = Boolean(
-        data.connected && data.drivers.length > 0
-      );
-
-      if (liveConnected) {
-        render(data);
-      }
+      latestData = data;
+      render(data);
     })
     .catch((error) => {
       log(`Erreur live : ${error}`);
@@ -67,14 +44,14 @@ function formatClock() {
 }
 
 function updateClock() {
-  if (!liveConnected) {
+  if (!latestData) {
     sessionInfo.textContent = `NO SESSION  •  ${formatClock()}`;
     return;
   }
 
-  const session = latestSession();
+  const session = latestData.session;
 
-  if (!session) {
+  if (!latestData.connected || session.name === "NO SESSION") {
     sessionInfo.textContent = `NO SESSION  •  ${formatClock()}`;
     return;
   }
@@ -100,12 +77,6 @@ function updateClock() {
   }
 
   sessionInfo.textContent = formatClock();
-}
-
-let latestSessionData = null;
-
-function latestSession() {
-  return latestSessionData;
 }
 
 function createRow() {
@@ -166,12 +137,15 @@ function updateRow(row, driver, previous) {
 }
 
 function render(data) {
-  latestSessionData = data.session;
-
   const track = data.track;
 
   overlay.classList.toggle("yellow", track.status === "YELLOW");
   overlay.classList.toggle("red", track.status === "RED");
+
+  connectionDot.classList.toggle(
+    "online",
+    Boolean(data.connected)
+  );
 
   sessionName.textContent = (
     track.label || data.session.name || "NO SESSION"

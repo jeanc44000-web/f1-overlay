@@ -48,6 +48,38 @@ body {
   text-transform: uppercase;
 }
 
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.connection-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ff4b4b;
+}
+
+.connection-dot.online {
+  background: #2fbf4f;
+  animation: pulse 1.2s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(47, 191, 79, 0.7);
+  }
+
+  70% {
+    box-shadow: 0 0 0 6px rgba(47, 191, 79, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(47, 191, 79, 0);
+  }
+}
+
 #session-name.yellow {
   color: #ffd400;
 }
@@ -63,7 +95,7 @@ body {
 
 .row {
   display: grid;
-  grid-template-columns: 24px 52px 1fr 24px;
+  grid-template-columns: 24px 58px 1fr 24px;
   align-items: center;
   gap: 5px;
   height: 23px;
@@ -86,6 +118,22 @@ body {
 .row.eliminated .position,
 .row.eliminated .tla {
   color: #ff4b4b !important;
+}
+
+.tla-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.pit-badge {
+  position: absolute;
+  right: -14px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  font-weight: 800;
+  color: #ffd400;
 }
 
 @keyframes gained {

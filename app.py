@@ -26,8 +26,6 @@ F1_CONNECT_URL = (
     "&connectionData=%5B%7B%22name%22%3A%22Streaming%22%7D%5D"
 )
 
-OPENF1_URL = "https://api.openf1.org/v1"
-
 TOPICS = [
     "Heartbeat",
     "SessionInfo",
@@ -54,30 +52,30 @@ TEAM_COLORS = {
     "Cadillac": "#ececec",
 }
 
-FALLBACK_TEAM_BY_TLA = {
-    "NOR": "McLaren",
-    "PIA": "McLaren",
-    "LEC": "Ferrari",
-    "HAM": "Ferrari",
-    "VER": "Red Bull",
-    "HAD": "Red Bull",
-    "RUS": "Mercedes",
-    "ANT": "Mercedes",
-    "ALO": "Aston Martin",
-    "STR": "Aston Martin",
-    "GAS": "Alpine",
-    "COL": "Alpine",
-    "ALB": "Williams",
-    "SAI": "Williams",
-    "LAW": "Racing Bulls",
-    "TSU": "Racing Bulls",
-    "OCO": "Haas",
-    "CAM": "Haas",
-    "HUL": "Audi",
-    "BOR": "Audi",
-    "PER": "Cadillac",
-    "BOT": "Cadillac",
-}
+DEFAULT_DRIVERS = [
+    {"position": 1, "tla": "NOR", "team": "McLaren", "team_color": "#ff8000"},
+    {"position": 2, "tla": "PIA", "team": "McLaren", "team_color": "#ff8000"},
+    {"position": 3, "tla": "LEC", "team": "Ferrari", "team_color": "#e8002d"},
+    {"position": 4, "tla": "HAM", "team": "Ferrari", "team_color": "#e8002d"},
+    {"position": 5, "tla": "VER", "team": "Red Bull", "team_color": "#1e2a62"},
+    {"position": 6, "tla": "HAD", "team": "Red Bull", "team_color": "#1e2a62"},
+    {"position": 7, "tla": "RUS", "team": "Mercedes", "team_color": "#00d2be"},
+    {"position": 8, "tla": "ANT", "team": "Mercedes", "team_color": "#00d2be"},
+    {"position": 9, "tla": "ALO", "team": "Aston Martin", "team_color": "#00665e"},
+    {"position": 10, "tla": "STR", "team": "Aston Martin", "team_color": "#00665e"},
+    {"position": 11, "tla": "GAS", "team": "Alpine", "team_color": "#0093cc"},
+    {"position": 12, "tla": "COL", "team": "Alpine", "team_color": "#0093cc"},
+    {"position": 13, "tla": "ALB", "team": "Williams", "team_color": "#1868db"},
+    {"position": 14, "tla": "SAI", "team": "Williams", "team_color": "#1868db"},
+    {"position": 15, "tla": "LAW", "team": "Racing Bulls", "team_color": "#6692ff"},
+    {"position": 16, "tla": "TSU", "team": "Racing Bulls", "team_color": "#6692ff"},
+    {"position": 17, "tla": "OCO", "team": "Haas", "team_color": "#b6babd"},
+    {"position": 18, "tla": "CAM", "team": "Haas", "team_color": "#b6babd"},
+    {"position": 19, "tla": "HUL", "team": "Audi", "team_color": "#bb0a30"},
+    {"position": 20, "tla": "BOR", "team": "Audi", "team_color": "#bb0a30"},
+    {"position": 21, "tla": "PER", "team": "Cadillac", "team_color": "#ececec"},
+    {"position": 22, "tla": "BOT", "team": "Cadillac", "team_color": "#ececec"},
+]
 
 state = {
     "session": {
@@ -110,10 +108,9 @@ def normalize_team(team_name, tla, team_colour=None):
         if known.lower() in team_name.lower():
             return known, color
 
-    fallback = FALLBACK_TEAM_BY_TLA.get(tla)
-
-    if fallback:
-        return fallback, TEAM_COLORS[fallback]
+    for driver in DEFAULT_DRIVERS:
+        if driver["tla"] == tla:
+            return driver["team"], driver["team_color"]
 
     return team_name or "F1", "#9aa0a6"
 
@@ -332,52 +329,79 @@ def handle_topic(topic, payload):
 
 
 def snapshot():
-    drivers = []
+    if state["connected"] and state["drivers"]:
+        drivers = []
 
-    for driver in state["drivers"].values():
-        if not driver.get("tla"):
-            continue
+        for driver in state["drivers"].values():
+            if not driver.get("tla"):
+                continue
 
-        try:
-            position = int(driver.get("position", 999))
-        except (TypeError, ValueError):
-            position = 999
+            try:
+                position = int(driver.get("position", 999))
+            except (TypeError, ValueError):
+                position = 999
 
-        drivers.append({
-            "position": position,
-            "tla": driver.get("tla", ""),
-            "team": driver.get("team", ""),
-            "team_color": driver.get("team_color", "#9aa0a6"),
-            "interval": driver.get("interval", ""),
-            "gap": driver.get("gap", ""),
-            "tyre": driver.get("tyre", ""),
-            "lap": driver.get("lap", ""),
-            "pit": driver.get("pit", False),
-            "status": driver.get("status", ""),
-            "knocked_out": bool(driver.get("KnockedOut", False)),
-        })
+            drivers.append({
+                "position": position,
+                "tla": driver.get("tla", ""),
+                "team": driver.get("team", ""),
+                "team_color": driver.get("team_color", "#9aa0a6"),
+                "interval": driver.get("interval", ""),
+                "gap": driver.get("gap", ""),
+                "tyre": driver.get("tyre", ""),
+                "lap": driver.get("lap", ""),
+                "pit": driver.get("pit", False),
+                "status": driver.get("status", ""),
+                "knocked_out": bool(driver.get("KnockedOut", False)),
+            })
 
-    drivers.sort(key=lambda driver: driver["position"])
+        drivers.sort(key=lambda driver: driver["position"])
 
-    phase = state["session"]["phase"].upper()
+        phase = state["session"]["phase"].upper()
 
-    if phase in ("Q1", "Q2"):
-        cutoff = 15 if phase == "Q1" else 10
+        if phase in ("Q1", "Q2"):
+            cutoff = 15 if phase == "Q1" else 10
+
+            for driver in drivers:
+                if driver["position"] > cutoff:
+                    driver["eliminated"] = True
 
         for driver in drivers:
-            if driver["position"] > cutoff:
-                driver["eliminated"] = True
+            driver.setdefault(
+                "eliminated",
+                driver["knocked_out"],
+            )
 
-    for driver in drivers:
-        driver.setdefault(
-            "eliminated",
-            driver["knocked_out"],
-        )
+        return {
+            "session": state["session"],
+            "track": state["track"],
+            "drivers": drivers,
+            "server_time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+            "connected": True,
+        }
+
+    fallback_drivers = []
+
+    for driver in DEFAULT_DRIVERS:
+        fallback_drivers.append({
+            "position": driver["position"],
+            "tla": driver["tla"],
+            "team": driver["team"],
+            "team_color": driver["team_color"],
+            "interval": "",
+            "gap": "",
+            "tyre": "",
+            "lap": "",
+            "pit": False,
+            "status": "",
+            "knocked_out": False,
+            "eliminated": False,
+        })
 
     return {
         "session": state["session"],
         "track": state["track"],
-        "drivers": drivers,
+        "drivers": fallback_drivers,
         "server_time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
         "connected": state["connected"],
     }
@@ -495,127 +519,6 @@ def index():
 @app.route("/api/live")
 def live():
     return snapshot()
-
-
-@app.route("/api/last-result")
-def last_result():
-    try:
-        sessions = requests.get(
-            f"{OPENF1_URL}/sessions",
-            timeout=25,
-        ).json()
-
-        finished_sessions = [
-            session
-            for session in sessions
-            if session.get("date_end")
-        ]
-
-        finished_sessions.sort(
-            key=lambda session: session["date_end"],
-            reverse=True,
-        )
-
-        if not finished_sessions:
-            return {
-                "session": {"name": "LAST SESSION"},
-                "track": {"status": "GREEN"},
-                "drivers": [],
-            }
-
-        last_session = finished_sessions[0]
-        session_key = last_session["session_key"]
-
-        positions = requests.get(
-            f"{OPENF1_URL}/position?session_key={session_key}",
-            timeout=25,
-        ).json()
-
-        drivers = requests.get(
-            f"{OPENF1_URL}/drivers?session_key={session_key}",
-            timeout=25,
-        ).json()
-
-        driver_map = {
-            driver["driver_number"]: driver
-            for driver in drivers
-        }
-
-        latest_positions = {}
-
-        for item in positions:
-            number = item["driver_number"]
-            latest_positions[number] = item
-
-        result = []
-
-        for number, item in latest_positions.items():
-            info = driver_map.get(number, {})
-
-            tla = info.get("name_acronym", "")
-            team, color = normalize_team(
-                info.get("team_name", ""),
-                tla,
-                info.get("team_colour"),
-            )
-
-            result.append({
-                "position": item.get("position", 999),
-                "tla": tla,
-                "team": team,
-                "team_color": color,
-                "interval": "",
-                "gap": "",
-                "tyre": "",
-                "pit": False,
-                "eliminated": False,
-            })
-
-        result.sort(key=lambda driver: driver["position"])
-        result = result[:20]
-
-        session_name = last_session.get("session_name", "LAST SESSION")
-
-        name_map = {
-            "Practice 1": "FP1",
-            "Practice 2": "FP2",
-            "Practice 3": "FP3",
-            "Qualifying": "QUALI",
-            "Qualifying 1": "Q1",
-            "Qualifying 2": "Q2",
-            "Qualifying 3": "Q3",
-            "Race": "RACE",
-            "Sprint": "SPRINT",
-        }
-
-        return {
-            "session": {
-                "name": name_map.get(
-                    session_name,
-                    session_name.upper(),
-                ),
-                "status": "FINISHED",
-                "phase": "",
-                "time_remaining": "",
-                "current_lap": "",
-                "total_laps": "",
-            },
-            "track": {
-                "status": "GREEN",
-                "label": "",
-                "sector": "",
-            },
-            "drivers": result,
-            "connected": True,
-        }
-
-    except Exception as error:
-        return {
-            "session": {"name": "LAST SESSION"},
-            "track": {"status": "GREEN"},
-            "drivers": [],
-            "error": str(error),
-        }
 
 
 @app.route("/api/debug")

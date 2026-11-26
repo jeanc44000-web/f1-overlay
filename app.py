@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import threading
@@ -99,7 +100,10 @@ state = {
 }
 
 
-def normalize_team(team_name, tla):
+def normalize_team(team_name, tla, team_colour=None):
+    if team_colour:
+        return team_name or "F1", team_colour
+
     team_name = (team_name or "").strip()
 
     for known, color in TEAM_COLORS.items():
@@ -146,13 +150,17 @@ def update_driver_list(data):
             or driver.get("team", "")
         )
 
-        team, color = normalize_team(team_name, tla)
+        team, color = normalize_team(
+            team_name,
+            tla,
+            info.get("TeamColour"),
+        )
 
         driver.update({
             "number": str(number),
             "tla": tla,
             "team": team,
-            "team_color": info.get("TeamColour") or color,
+            "team_color": color,
             "full_name": (
                 f"{info.get('FirstName', '')} "
                 f"{info.get('LastName', '')}"
@@ -412,7 +420,7 @@ async def f1_live_loop():
 
             async with websockets.connect(
                 websocket_url,
-                additional_headers=headers,
+                extra_headers=headers,
                 ping_interval=None,
                 ping_timeout=None,
             ) as websocket:
@@ -462,9 +470,6 @@ async def f1_live_loop():
             await asyncio.sleep(5)
 
 
-import asyncio
-
-
 def start_f1_connection():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -497,39 +502,38 @@ def last_result():
     try:
         sessions = requests.get(
             f"{OPENF1_URL}/sessions",
-            timeout=20,
+            timeout=25,
         ).json()
 
-        race_sessions = [
+        finished_sessions = [
             session
             for session in sessions
-            if session.get("session_name") == "Race"
-            and session.get("date_end")
+            if session.get("date_end")
         ]
 
-        race_sessions.sort(
+        finished_sessions.sort(
             key=lambda session: session["date_end"],
             reverse=True,
         )
 
-        if not race_sessions:
+        if not finished_sessions:
             return {
-                "session": {"name": "LAST RACE"},
+                "session": {"name": "LAST SESSION"},
                 "track": {"status": "GREEN"},
                 "drivers": [],
             }
 
-        last_session = race_sessions[0]
+        last_session = finished_sessions[0]
         session_key = last_session["session_key"]
 
         positions = requests.get(
             f"{OPENF1_URL}/position?session_key={session_key}",
-            timeout=20,
+            timeout=25,
         ).json()
 
         drivers = requests.get(
             f"{OPENF1_URL}/drivers?session_key={session_key}",
-            timeout=20,
+            timeout=25,
         ).json()
 
         driver_map = {
@@ -552,6 +556,7 @@ def last_result():
             team, color = normalize_team(
                 info.get("team_name", ""),
                 tla,
+                info.get("team_colour"),
             )
 
             result.append({
@@ -569,9 +574,26 @@ def last_result():
         result.sort(key=lambda driver: driver["position"])
         result = result[:20]
 
+        session_name = last_session.get("session_name", "LAST SESSION")
+
+        name_map = {
+            "Practice 1": "FP1",
+            "Practice 2": "FP2",
+            "Practice 3": "FP3",
+            "Qualifying": "QUALI",
+            "Qualifying 1": "Q1",
+            "Qualifying 2": "Q2",
+            "Qualifying 3": "Q3",
+            "Race": "RACE",
+            "Sprint": "SPRINT",
+        }
+
         return {
             "session": {
-                "name": "LAST RACE",
+                "name": name_map.get(
+                    session_name,
+                    session_name.upper(),
+                ),
                 "status": "FINISHED",
                 "phase": "",
                 "time_remaining": "",
@@ -589,7 +611,7 @@ def last_result():
 
     except Exception as error:
         return {
-            "session": {"name": "LAST RACE"},
+            "session": {"name": "LAST SESSION"},
             "track": {"status": "GREEN"},
             "drivers": [],
             "error": str(error),

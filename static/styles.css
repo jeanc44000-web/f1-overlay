@@ -1,4 +1,10 @@
-@import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&display=swap");
+@@import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&display=swap");
+
+:root {
+  --row-h: 24px;
+  --card-w: 330px;
+  --pit-gutter: 26px; /* place à gauche du cadre pour le "P" */
+}
 
 * {
   margin: 0;
@@ -6,22 +12,32 @@
   box-sizing: border-box;
 }
 
+html,
 body {
   background: transparent;
-  font-family: "Barlow Condensed", sans-serif;
+  overflow: hidden;
+}
+
+body {
+  font-family: "Barlow Condensed", "Arial Narrow", sans-serif;
   color: #ffffff;
 }
 
+.board {
+  position: relative;
+  width: calc(var(--card-w) + var(--pit-gutter));
+  padding-left: var(--pit-gutter);
+}
+
+/* ---------- Cadre ---------- */
 .overlay {
-  width: 330px;
+  width: var(--card-w);
   background: #08080a;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-top: 4px solid #1c1c20;
   border-radius: 4px;
   overflow: hidden;
-  transition:
-    border-color 250ms ease,
-    box-shadow 250ms ease;
+  transition: border-color 250ms ease, box-shadow 250ms ease, opacity 250ms ease;
 }
 
 .overlay.yellow {
@@ -34,6 +50,11 @@ body {
   box-shadow: inset 0 0 45px rgba(255, 30, 30, 0.18);
 }
 
+.overlay.placeholder .rows {
+  opacity: 0.45;
+}
+
+/* ---------- Header ---------- */
 .header {
   display: flex;
   align-items: center;
@@ -42,7 +63,7 @@ body {
   padding: 0 9px;
   background: #101014;
   border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -51,162 +72,164 @@ body {
 .header-left {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
+}
+
+#session-name.yellow { color: #ffd400; }
+#session-name.red { color: #ff4b4b; }
+
+#session-info {
+  color: #d6d6d6;
+  font-variant-numeric: tabular-nums;
 }
 
 .connection-dot {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: #ff4b4b;
 }
 
+.connection-dot.waiting {
+  background: #ffa31a;
+}
+
 .connection-dot.online {
   background: #2fbf4f;
-  animation: pulse 1.2s infinite;
+  animation: pulse 1.4s infinite;
 }
 
 @keyframes pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(47, 191, 79, 0.7);
-  }
-
-  70% {
-    box-shadow: 0 0 0 6px rgba(47, 191, 79, 0);
-  }
-
-  100% {
-    box-shadow: 0 0 0 0 rgba(47, 191, 79, 0);
-  }
+  0%   { box-shadow: 0 0 0 0 rgba(47, 191, 79, 0.7); }
+  70%  { box-shadow: 0 0 0 6px rgba(47, 191, 79, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(47, 191, 79, 0); }
 }
 
-#session-name.yellow {
-  color: #ffd400;
-}
-
-#session-name.red {
-  color: #ff4b4b;
-}
-
+/* ---------- Lignes (positionnées en absolu pour animer les dépassements) ---------- */
 .rows {
-  display: flex;
-  flex-direction: column;
+  position: relative;
+  transition: opacity 250ms ease;
 }
 
 .row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--row-h);
   display: grid;
-  grid-template-columns: 24px 58px 1fr 24px;
+  grid-template-columns: 22px 4px 1fr 22px 66px;
   align-items: center;
-  gap: 5px;
-  height: 23px;
-  padding: 0 8px;
+  column-gap: 7px;
+  padding: 0 9px 0 8px;
   background: #0b0b0e;
   border-bottom: 1px solid rgba(255, 255, 255, 0.045);
-  transition:
-    transform 350ms cubic-bezier(0.22, 0.61, 0.36, 1),
-    background-color 250ms ease;
-}
-
-.row.gained {
-  animation: gained 900ms ease;
-}
-
-.row.lost {
-  animation: lost 900ms ease;
+  will-change: transform;
+  transition: transform 500ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .row.eliminated .position,
 .row.eliminated .tla {
-  color: #ff4b4b !important;
-}
-
-.tla-wrapper {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.pit-badge {
-  position: absolute;
-  right: -14px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 10px;
-  font-weight: 800;
-  color: #ffd400;
-}
-
-@keyframes gained {
-  0% {
-    background-color: rgba(255, 255, 255, 0.10);
-  }
-
-  100% {
-    background-color: transparent;
-  }
-}
-
-@keyframes lost {
-  0% {
-    background-color: rgba(255, 70, 70, 0.12);
-  }
-
-  100% {
-    background-color: transparent;
-  }
+  color: #ff4b4b;
 }
 
 .position {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
   color: #e8e8e8;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.team-bar {
+  width: 4px;
+  height: 15px;
+  border-radius: 2px;
+  background: #9aa0a6;
 }
 
 .tla {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 700;
   letter-spacing: 0.05em;
 }
 
 .gap {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: #c9c9c9;
   text-align: right;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
+.gap.leader {
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.gap.out {
+  color: #ff4b4b;
+  font-weight: 700;
+}
+
+/* ---------- Pneus ---------- */
 .tyre {
-  width: 20px;
-  height: 16px;
-  border-radius: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid transparent;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
-  color: #000000;
+  line-height: 1;
 }
 
-.tyre.s {
-  background: #ff1e1e;
-  color: #ffffff;
+.tyre.s { border-color: #ff2b2b; color: #ff2b2b; }
+.tyre.m { border-color: #ffd400; color: #ffd400; }
+.tyre.h { border-color: #f2f2f2; color: #f2f2f2; }
+.tyre.i { border-color: #2fbf4f; color: #2fbf4f; }
+.tyre.w { border-color: #2f7bff; color: #2f7bff; }
+
+/* ---------- Badge "P" (hors du cadre, à gauche) ---------- */
+.pit-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--pit-gutter);
+  pointer-events: none;
 }
 
-.tyre.m {
+.pit {
+  position: absolute;
+  left: 3px;
+  top: 0;
+  height: var(--row-h);
+  width: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  will-change: transform;
+  transition: transform 500ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity 150ms ease;
+}
+
+.pit.show {
+  opacity: 1;
+}
+
+.pit span {
+  width: 17px;
+  height: 17px;
+  border-radius: 4px;
   background: #ffd400;
-}
-
-.tyre.h {
-  background: #f2f2f2;
-}
-
-.tyre.i {
-  background: #2fbf4f;
-  color: #ffffff;
-}
-
-.tyre.w {
-  background: #2f7bff;
-  color: #ffffff;
+  color: #000;
+  font-size: 13px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }

@@ -540,12 +540,16 @@ def get_signalr_headers():
         timeout=20,
     )
 
-    response.raise_for_status()
-
     cookie = response.cookies.get("AWSALBCORS")
 
-    if cookie:
-        headers["Cookie"] = f"AWSALBCORS={cookie}"
+    if not cookie:
+        raise RuntimeError(
+            f"Cookie AWSALBCORS absent. "
+            f"Réponse HTTP : {response.status_code}. "
+            f"Cookies reçus : {list(response.cookies.keys())}"
+        )
+
+    headers["Cookie"] = f"AWSALBCORS={cookie}"
 
     return headers
 

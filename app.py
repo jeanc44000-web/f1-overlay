@@ -1,21 +1,31 @@
 import json
 import os
+import threading
 import time
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import requests
+import websockets
 from flask import Flask, Response, render_template
-from signalrcore.hub_connection_builder import HubConnectionBuilder
 
 app = Flask(__name__)
 
-F1_HUB_URL = "wss://livetiming.formula1.com/signalrcore"
-OPENF1_URL = "https://api.openf1.org/v1"
-
-F1_API_KEY = os.getenv(
-    "F1_API_KEY",
-    "JJXYS7ilZM7FYIGDXIN3tc2aTqTIaFqd",
+F1_NEGOTIATE_URL = (
+    "https://livetiming.formula1.com/signalr/negotiate"
+    "?connectionData=%5B%7B%22name%22%3A%22Streaming%22%7D%5D"
+    "&clientProtocol=1.5"
 )
+
+F1_CONNECT_URL = (
+    "wss://livetiming.formula1.com/signalr/connect"
+    "?clientProtocol=1.5"
+    "&transport=webSockets"
+    "&connectionToken={token}"
+    "&connectionData=%5B%7B%22name%22%3A%22Streaming%22%7D%5D"
+)
+
+OPENF1_URL = "https://api.openf1.org/v1"
 
 TOPICS = [
     "Heartbeat",
@@ -26,6 +36,7 @@ TOPICS = [
     "TimingData",
     "TimingAppData",
     "TrackStatus",
+    "LapCount",
 ]
 
 TEAM_COLORS = {
@@ -175,6 +186,10 @@ def update_timing_data(data):
             driver.get("lap", ""),
         )
 
+        driver["pit"] = bool(
+            driver.get("InPit", driver.get("pit", False))
+        )
+
 
 def update_tyres(data):
     if not isinstance(data, dict):
@@ -230,6 +245,20 @@ def update_session_data(data):
 
     if remaining:
         state["session"]["time_remaining"] = remaining
+
+
+def update_lap_count(data):
+    if not isinstance(data, dict):
+        return
+
+    current_lap = data.get("CurrentLap", "")
+    total_laps = data.get("TotalLaps", "")
+
+    if current_lap:
+        state["session"]["current_lap"] = current_lap
+
+    if total_laps:
+        state["session"]["total_laps"] = total_laps
 
 
 def update_track_status(data):
@@ -288,23 +317,10 @@ def handle_topic(topic, payload):
     elif topic == "TrackStatus":
         update_track_status(payload)
 
+    elif topic == "LapCount":
+        update_lap_count(payload)
+
     state["last_update"] = time.time()
-
-
-def on_streaming(arguments):
-    if len(arguments) < 2:
-        return
-
-    topic = arguments[0]
-    payload = arguments[1]
-
-    if isinstance(payload, str):
-        try:
-            payload = json.loads(payload)
-        except json.JSONDecodeError:
-            return
-
-    handle_topic(topic, payload)
 
 
 def snapshot():
@@ -328,6 +344,7 @@ def snapshot():
             "gap": driver.get("gap", ""),
             "tyre": driver.get("tyre", ""),
             "lap": driver.get("lap", ""),
+            "pit": driver.get("pit", False),
             "status": driver.get("status", ""),
             "knocked_out": bool(driver.get("KnockedOut", False)),
         })
@@ -358,65 +375,111 @@ def snapshot():
     }
 
 
-def start_f1_connection():
-    token = os.getenv("F1TV_TOKEN", "").strip()
-
-    options = {
-        "verify_ssl": True,
-        "headers": {
-            "apikey": F1_API_KEY,
-            "CD-SystemID": "60a9ad84-e93d-480f-80d6-af37494f2e22",
-            "CD-DeviceType": "4",
-            "CD-DistributionChannel": (
-                "95d6cc7d-63fe-453b-b734-1cde4fa3d08c"
-            ),
-            "CD-Language": "en-US",
-            "Origin": "https://f1tv.formula1.com",
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/148.0.0.0 Safari/537.36"
-            ),
-        },
+def negotiate():
+    headers = {
+        "User-Agent": "BestHTTP",
+        "Accept-Encoding": "gzip,identity",
     }
 
-    if token:
-        options["access_token_factory"] = lambda: token
-
-    hub = (
-        HubConnectionBuilder()
-        .with_url(F1_HUB_URL, options=options)
-        .with_automatic_reconnect({
-            "type": "raw",
-            "keep_alive_interval": 10,
-            "reconnect_interval": 5,
-            "max_reconnect_attempts": 999,
-        })
-        .build()
+    response = requests.get(
+        F1_NEGOTIATE_URL,
+        headers=headers,
+        timeout=20,
     )
 
-    hub.on("Streaming", on_streaming)
+    response.raise_for_status()
 
-    hub.on_open(lambda: (
-        state.update({
-            "connected": True,
-            "last_error": "",
-        })
-    ))
+    data = response.json()
+    cookies = response.headers.get("Set-Cookie", "")
 
-    hub.on_close(lambda: state.update({
-        "connected": False,
-    }))
-
-    hub.on_error(lambda error: state.update({
-        "connected": False,
-        "last_error": str(error),
-    }))
-
-    hub.start()
+    return data["ConnectionToken"], cookies
 
 
-start_f1_connection()
+async def f1_live_loop():
+    while True:
+        try:
+            connection_token, cookie = negotiate()
+
+            websocket_url = F1_CONNECT_URL.format(
+                token=quote(connection_token, safe="")
+            )
+
+            headers = {
+                "User-Agent": "BestHTTP",
+                "Accept-Encoding": "gzip,identity",
+                "Cookie": cookie,
+            }
+
+            async with websockets.connect(
+                websocket_url,
+                additional_headers=headers,
+                ping_interval=None,
+                ping_timeout=None,
+            ) as websocket:
+                subscribe_message = json.dumps({
+                    "H": "Streaming",
+                    "M": "Subscribe",
+                    "A": [TOPICS],
+                    "I": 1,
+                })
+
+                await websocket.send(subscribe_message)
+
+                state["connected"] = True
+                state["last_error"] = ""
+
+                async for raw_message in websocket:
+                    try:
+                        message = json.loads(raw_message)
+                    except json.JSONDecodeError:
+                        continue
+
+                    method_calls = message.get("M", [])
+
+                    for method_call in method_calls:
+                        if method_call.get("H") != "Streaming":
+                            continue
+
+                        topic = method_call.get("M", "")
+                        arguments = method_call.get("A", [])
+
+                        if not topic or not arguments:
+                            continue
+
+                        payload = arguments[0]
+
+                        if isinstance(payload, str):
+                            try:
+                                payload = json.loads(payload)
+                            except json.JSONDecodeError:
+                                continue
+
+                        handle_topic(topic, payload)
+
+        except Exception as error:
+            state["connected"] = False
+            state["last_error"] = str(error)
+            await asyncio.sleep(5)
+
+
+import asyncio
+
+
+def start_f1_connection():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(f1_live_loop())
+
+
+threading.Thread(target=start_f1_connection, daemon=True).start()
+
+
+@app.after_request
+def add_cors(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    return response
 
 
 @app.route("/")
@@ -424,61 +487,43 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/api/stream")
-def stream():
-    def generate():
-        last_payload = None
-
-        while True:
-            current = snapshot()
-            encoded = json.dumps(current, separators=(",", ":"))
-
-            if encoded != last_payload:
-                yield f"data: {encoded}\n\n"
-                last_payload = encoded
-
-            time.sleep(0.25)
-
-    return Response(
-        generate(),
-        mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+@app.route("/api/live")
+def live():
+    return snapshot()
 
 
 @app.route("/api/last-result")
 def last_result():
     try:
         sessions = requests.get(
-            f"{OPENF1_URL}/sessions?session_name=Race",
+            f"{OPENF1_URL}/sessions",
             timeout=20,
         ).json()
 
-        sessions = [
+        race_sessions = [
             session
             for session in sessions
-            if session.get("date_end")
+            if session.get("session_name") == "Race"
+            and session.get("date_end")
         ]
 
-        sessions.sort(
+        race_sessions.sort(
             key=lambda session: session["date_end"],
             reverse=True,
         )
 
-        if not sessions:
+        if not race_sessions:
             return {
                 "session": {"name": "LAST RACE"},
+                "track": {"status": "GREEN"},
                 "drivers": [],
             }
 
-        last_session = sessions[0]
+        last_session = race_sessions[0]
         session_key = last_session["session_key"]
 
         positions = requests.get(
-            f"{OPENF1_URL}/position?session_key={session_key}&position<=20",
+            f"{OPENF1_URL}/position?session_key={session_key}",
             timeout=20,
         ).json()
 
@@ -492,10 +537,15 @@ def last_result():
             for driver in drivers
         }
 
-        result = []
+        latest_positions = {}
 
         for item in positions:
             number = item["driver_number"]
+            latest_positions[number] = item
+
+        result = []
+
+        for number, item in latest_positions.items():
             info = driver_map.get(number, {})
 
             tla = info.get("name_acronym", "")
@@ -505,17 +555,19 @@ def last_result():
             )
 
             result.append({
-                "position": item["position"],
+                "position": item.get("position", 999),
                 "tla": tla,
                 "team": team,
                 "team_color": color,
                 "interval": "",
                 "gap": "",
                 "tyre": "",
+                "pit": False,
                 "eliminated": False,
             })
 
         result.sort(key=lambda driver: driver["position"])
+        result = result[:20]
 
         return {
             "session": {
@@ -553,7 +605,6 @@ def debug():
         "track": state["track"],
         "last_update": state["last_update"],
         "last_error": state["last_error"],
-        "token_present": bool(os.getenv("F1TV_TOKEN", "").strip()),
         "now": time.time(),
     }
 

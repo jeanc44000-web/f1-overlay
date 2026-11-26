@@ -1,172 +1,252 @@
-const LIVE_URL = "https://f1-overlay.onrender.com/api/live";
+/*
+ * F1 live overlay — front.
+ * Paramètres d'URL :
+ *   ?mode=interval   écart avec la voiture devant (défaut : écart au leader)
+ *   ?demo=1          fausses données animées (pour tester sans session live)
+ */
+const params = new URLSearchParams(location.search);
+const MODE = params.get("mode") === "interval" ? "interval" : "gap";
+const DEMO = params.get("demo") ? "demo=1" : "";
 
+const ROW_H = 24;
+
+const board = document.getElementById("board");
 const overlay = document.getElementById("overlay");
 const connectionDot = document.getElementById("connection-dot");
 const sessionName = document.getElementById("session-name");
 const sessionInfo = document.getElementById("session-info");
-const rowsContainer = document.getElementById("rows");
+const rowsEl = document.getElementById("rows");
+const pitLayer = document.getElementById("pit-layer");
 
-let previousDrivers = new Map();
-let latestData = null;
+const entries = new Map(); // tla -> { row, pit, index, els..., cache }
+let lastMessageAt = 0;
 
-function log(message) {
-  console.log("[F1 OVERLAY]", message);
-}
+/* ---------------- Rendu ---------------- */
 
-function start() {
-  log("Overlay démarré");
-
-  updateClock();
-  setInterval(updateClock, 1000);
-
-  loadLive();
-  setInterval(loadLive, 1000);
-}
-
-function loadLive() {
-  fetch(LIVE_URL)
-    .then((response) => response.json())
-    .then((data) => {
-      latestData = data;
-      render(data);
-    })
-    .catch((error) => {
-      log(`Erreur live : ${error}`);
-    });
-}
-
-function formatClock() {
-  return new Date().toLocaleTimeString("fr-FR", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-function updateClock() {
-  if (!latestData) {
-    sessionInfo.textContent = `NO SESSION  •  ${formatClock()}`;
-    return;
+function setText(el, cache, key, value) {
+  if (cache[key] !== value) {
+    el.textContent = value;
+    cache[key] = value;
   }
-
-  const session = latestData.session;
-
-  if (!latestData.connected || session.name === "NO SESSION") {
-    sessionInfo.textContent = `NO SESSION  •  ${formatClock()}`;
-    return;
-  }
-
-  if (session.name === "RACE") {
-    if (session.current_lap && session.total_laps) {
-      sessionInfo.textContent = `LAP ${session.current_lap}/${session.total_laps}`;
-      return;
-    }
-
-    if (session.current_lap) {
-      sessionInfo.textContent = `LAP ${session.current_lap}`;
-      return;
-    }
-
-    sessionInfo.textContent = formatClock();
-    return;
-  }
-
-  if (session.time_remaining) {
-    sessionInfo.textContent = `${session.time_remaining}  •  ${formatClock()}`;
-    return;
-  }
-
-  sessionInfo.textContent = formatClock();
 }
 
-function createRow() {
+function createEntry() {
   const row = document.createElement("div");
   row.className = "row";
-
   row.innerHTML = `
     <span class="position"></span>
-    <span class="tla-wrapper">
-      <span class="tla"></span>
-      <span class="pit-badge"></span>
-    </span>
-    <span class="gap"></span>
+    <span class="team-bar"></span>
+    <span class="tla"></span>
     <span class="tyre"></span>
+    <span class="gap"></span>
   `;
 
-  return row;
+  const pit = document.createElement("div");
+  pit.className = "pit";
+  pit.innerHTML = "<span>P</span>";
+
+  return {
+    row,
+    pit,
+    index: -1,
+    cache: {},
+    position: row.querySelector(".position"),
+    bar: row.querySelector(".team-bar"),
+    tla: row.querySelector(".tla"),
+    tyre: row.querySelector(".tyre"),
+    gap: row.querySelector(".gap"),
+  };
 }
 
-function updateRow(row, driver, previous) {
-  row.querySelector(".position").textContent = driver.position;
-  row.querySelector(".tla").textContent = driver.tla;
-  row.querySelector(".tla").style.color = driver.team_color;
+function place(entry, index) {
+  const transform = `translateY(${index * ROW_H}px)`;
+  entry.row.style.transform = transform;
+  entry.pit.style.transform = transform;
+}
 
-  const pitBadge = row.querySelector(".pit-badge");
-  pitBadge.textContent = driver.pit ? "P" : "";
+function flash(entry, gained) {
+  entry.row.animate(
+    [
+      { backgroundColor: gained ? "rgba(70, 200, 110, 0.28)" : "rgba(255, 70, 70, 0.28)" },
+      { backgroundColor: "#0b0b0e" },
+    ],
+    { duration: 1200, easing: "ease-out" }
+  );
+}
 
-  const gap = driver.interval || driver.gap || "";
+function gapText(driver, index, session) {
+  if (driver.out) return { text: "OUT", cls: "out" };
 
-  if (driver.position === 1) {
-    row.querySelector(".gap").textContent = "LEADER";
-  } else if (gap) {
-    row.querySelector(".gap").textContent = `+${gap}`;
-  } else {
-    row.querySelector(".gap").textContent = "";
+  if (index === 0) {
+    if (session.is_race) return { text: "LEADER", cls: "leader" };
+    return { text: driver.best_lap || "", cls: "leader" };
   }
 
-  const tyre = row.querySelector(".tyre");
-  const compound = (driver.tyre || "").toUpperCase();
+  const value = MODE === "interval" ? driver.interval : driver.gap;
+  return { text: value || "", cls: "" };
+}
 
-  tyre.textContent = compound;
-  tyre.className = `tyre ${compound.toLowerCase()}`;
+function syncRows(drivers, session) {
+  const seen = new Set();
 
-  row.classList.toggle("eliminated", Boolean(driver.eliminated));
+  drivers.forEach((driver, index) => {
+    seen.add(driver.tla);
 
-  if (previous) {
-    const oldPosition = Number(previous.position);
-    const newPosition = Number(driver.position);
+    let entry = entries.get(driver.tla);
+    const isNew = !entry;
 
-    if (newPosition < oldPosition) {
-      row.classList.add("gained");
-      setTimeout(() => row.classList.remove("gained"), 900);
-    } else if (newPosition > oldPosition) {
-      row.classList.add("lost");
-      setTimeout(() => row.classList.remove("lost"), 900);
+    if (isNew) {
+      entry = createEntry();
+      entries.set(driver.tla, entry);
+      place(entry, index); // avant l'ajout au DOM : pas d'animation depuis le haut
+      entry.index = index;
+      rowsEl.appendChild(entry.row);
+      pitLayer.appendChild(entry.pit);
+    } else if (entry.index !== index) {
+      flash(entry, index < entry.index);
+      place(entry, index);
+      entry.index = index;
+    }
+
+    const c = entry.cache;
+    setText(entry.position, c, "pos", String(index + 1));
+    setText(entry.tla, c, "tla", driver.tla);
+
+    if (c.color !== driver.team_color) {
+      entry.bar.style.background = driver.team_color;
+      c.color = driver.team_color;
+    }
+
+    const tyre = (driver.tyre || "").toUpperCase();
+    if (c.tyre !== tyre) {
+      entry.tyre.textContent = tyre;
+      entry.tyre.className = `tyre ${tyre.toLowerCase()}`;
+      c.tyre = tyre;
+    }
+
+    const gap = gapText(driver, index, session);
+    setText(entry.gap, c, "gap", gap.text);
+    if (c.gapCls !== gap.cls) {
+      entry.gap.className = `gap ${gap.cls}`;
+      c.gapCls = gap.cls;
+    }
+
+    entry.row.classList.toggle("eliminated", Boolean(driver.eliminated));
+    entry.pit.classList.toggle("show", Boolean(driver.pit));
+  });
+
+  for (const [tla, entry] of entries) {
+    if (!seen.has(tla)) {
+      entry.row.remove();
+      entry.pit.remove();
+      entries.delete(tla);
     }
   }
+
+  const height = `${drivers.length * ROW_H}px`;
+  rowsEl.style.height = height;
+
+  // aligne la couche des "P" sur le haut de la liste
+  const offset =
+    rowsEl.getBoundingClientRect().top - board.getBoundingClientRect().top;
+  pitLayer.style.top = `${offset}px`;
+  pitLayer.style.height = height;
+}
+
+function infoText(session, hasData) {
+  if (!hasData) return "";
+
+  const status = String(session.status || "").toLowerCase();
+  if (status === "finished" || status === "finalised" || status === "ends") {
+    return "FINISHED";
+  }
+
+  if (session.is_race) {
+    if (session.current_lap && session.total_laps) {
+      return `LAP ${session.current_lap}/${session.total_laps}`;
+    }
+    return session.current_lap ? `LAP ${session.current_lap}` : "";
+  }
+
+  const part = session.part ? `Q${session.part}  ` : "";
+  return session.remaining ? `${part}${session.remaining}` : "";
+}
+
+function setDot(state) {
+  connectionDot.classList.remove("online", "waiting", "offline");
+  connectionDot.classList.add(state);
 }
 
 function render(data) {
-  const track = data.track;
+  lastMessageAt = Date.now();
+
+  const track = data.track || {};
+  const session = data.session || {};
+  const hasData = Boolean(data.has_data);
 
   overlay.classList.toggle("yellow", track.status === "YELLOW");
   overlay.classList.toggle("red", track.status === "RED");
+  overlay.classList.toggle("placeholder", !hasData);
 
-  connectionDot.classList.toggle(
-    "online",
-    Boolean(data.connected)
-  );
+  setDot(data.connected ? (hasData ? "online" : "waiting") : "offline");
 
-  sessionName.textContent = (
-    track.label || data.session.name || "NO SESSION"
-  );
-
+  sessionName.textContent = track.label || session.name || "NO SESSION";
   sessionName.classList.toggle("yellow", track.status === "YELLOW");
   sessionName.classList.toggle("red", track.status === "RED");
 
-  updateClock();
+  sessionInfo.textContent = infoText(session, hasData);
 
-  rowsContainer.innerHTML = "";
-
-  for (const driver of data.drivers) {
-    const row = createRow();
-    const previous = previousDrivers.get(driver.tla);
-
-    updateRow(row, driver, previous);
-
-    rowsContainer.appendChild(row);
-    previousDrivers.set(driver.tla, driver);
-  }
+  syncRows(data.drivers || [], session);
 }
 
-start();
+/* ---------------- Connexion : SSE, avec repli en polling ---------------- */
+
+function query() {
+  return DEMO ? `?${DEMO}` : "";
+}
+
+function startPolling() {
+  console.warn("[F1 OVERLAY] SSE indisponible, passage en polling 1 s");
+  const tick = () =>
+    fetch(`/api/live${query()}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then(render)
+      .catch((error) => {
+        console.error("[F1 OVERLAY] erreur live :", error);
+        setDot("offline");
+      });
+  tick();
+  setInterval(tick, 1000);
+}
+
+function startStream() {
+  if (!window.EventSource) return startPolling();
+
+  let failures = 0;
+  const source = new EventSource(`/api/stream${query()}`);
+
+  source.onmessage = (event) => {
+    failures = 0;
+    try {
+      render(JSON.parse(event.data));
+    } catch (error) {
+      console.error("[F1 OVERLAY] message illisible :", error);
+    }
+  };
+
+  source.onerror = () => {
+    failures += 1;
+    setDot("offline");
+    if (failures >= 5) {
+      source.close();
+      startPolling();
+    }
+  };
+}
+
+// Si plus rien n'arrive pendant 6 s : pastille rouge.
+setInterval(() => {
+  if (lastMessageAt && Date.now() - lastMessageAt > 6000) setDot("offline");
+}, 2000);
+
+startStream();

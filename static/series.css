@@ -1,0 +1,131 @@
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    min-height: 100%;
+    background: transparent;
+    color: #ffffff;
+    font-family: Arial, Helvetica, sans-serif;
+}
+
+.overlay {
+    width: 100%;
+    max-width: 1100px;
+    overflow: hidden;
+    background: rgba(12, 14, 19, 0.96);
+    border-left: 5px solid #e10600;
+}
+
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    background: #171a21;
+    border-bottom: 1px solid #343943;
+}
+
+.series-label {
+    font-size: 22px;
+    font-weight: 900;
+    letter-spacing: 1.5px;
+}
+
+.session-status {
+    padding: 6px 10px;
+    background: #4b4f58;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1px;
+}
+
+.session-status.live {
+    background: #147a43;
+}
+
+.timing-panel {
+    padding: 14px 20px 18px;
+}
+
+.timing-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 15px;
+    margin-bottom: 12px;
+}
+
+.timing-heading h1 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 900;
+    letter-spacing: 1px;
+}
+
+#last-update {
+    color: #aeb4bf;
+    font-size: 11px;
+}
+
+.table-wrapper {
+    width: 100%;
+    overflow-x: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+    font-size: 14px;
+}
+
+thead {
+    background: #282d36;
+}
+
+th {
+    padding: 10px 12px;
+    color: #c9ced7;
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+td {
+    padding: 11px 12px;
+    border-bottom: 1px solid #292e37;
+    white-space: nowrap;
+}
+
+tbody tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.035);
+}
+
+tbody tr:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.loading {
+    padding: 24px 12px;
+    color: #aeb4bf;
+    text-align: center;
+}
+
+footer {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 20px;
+    background: #171a21;
+    color: #aeb4bf;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1px;
+}

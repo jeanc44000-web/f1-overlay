@@ -124,93 +124,16 @@ def unwrap_value(value):
 
 def clean_gap(value):
     value = unwrap_value(value)
-
     if value is None:
         return ""
-
     return str(value).replace("+", "").strip()
-
-
-def first_non_empty(*values):
-    for value in values:
-        cleaned = clean_gap(value)
-
-        if cleaned:
-            return cleaned
-
-    return ""
-
-
-def get_first_stats_entry(stats):
-    """
-    Récupère le premier élément de Stats.
-    Le flux peut transmettre Stats sous forme de liste
-    ou de dictionnaire indexé par des nombres.
-    """
-
-    if isinstance(stats, list):
-        return stats[0] if stats else {}
-
-    if isinstance(stats, dict):
-        if not stats:
-            return {}
-
-        if any(
-            key in stats
-            for key in (
-                "TimeDiffToFastest",
-                "TimeDifftoPositionAhead",
-                "TimeDiffToPositionAhead",
-            )
-        ):
-            return stats
-
-        try:
-            first_key = min(stats.keys(), key=lambda key: int(key))
-        except (ValueError, TypeError):
-            first_key = next(iter(stats))
-
-        return stats.get(first_key, {})
-
-    return {}
-
-
-def get_timing_gaps(driver):
-    """
-    Les champs principaux sont utilisés en priorité.
-    En essais libres et en qualifications, le flux F1
-    peut fournir les écarts dans Stats[0] à la place.
-    """
-
-    stats = get_first_stats_entry(driver.get("Stats", {}))
-
-    if not isinstance(stats, dict):
-        stats = {}
-
-    interval = first_non_empty(
-        driver.get("IntervalToPositionAhead"),
-        driver.get("Interval"),
-        driver.get("interval"),
-        stats.get("TimeDifftoPositionAhead"),
-        stats.get("TimeDiffToPositionAhead"),
-    )
-
-    gap = first_non_empty(
-        driver.get("GapToLeader"),
-        driver.get("gap"),
-        stats.get("TimeDiffToFastest"),
-    )
-
-    return gap, interval
 
 
 def normalize_team(team_name, tla, team_colour=None):
     if team_colour:
         colour = str(team_colour)
-
         if not colour.startswith("#"):
             colour = f"#{colour}"
-
         return team_name or "F1", colour
 
     team_name = (team_name or "").strip()
@@ -236,7 +159,6 @@ def apply_patch(target, patch):
 def topic_lines(data):
     if isinstance(data, dict) and isinstance(data.get("Lines"), dict):
         return data["Lines"]
-
     return data
 
 
@@ -294,7 +216,56 @@ def update_timing_data(data):
             driver.get("Position", driver.get("position", ""))
         )
 
-        gap, interval = get_timing_gaps(driver)
+        # Récupération des écarts habituels.
+        interval = clean_gap(
+            driver.get(
+                "IntervalToPositionAhead",
+                driver.get("Interval", driver.get("interval", "")),
+            )
+        )
+
+        gap = clean_gap(
+            driver.get("GapToLeader", driver.get("gap", ""))
+        )
+
+        # Secours pour les séances où les écarts sont dans Stats.
+        stats = driver.get("Stats", {})
+        stats_entry = {}
+
+        if isinstance(stats, list) and stats:
+            stats_entry = stats[0]
+
+        elif isinstance(stats, dict) and stats:
+            if (
+                "TimeDiffToFastest" in stats
+                or "TimeDifftoPositionAhead" in stats
+                or "TimeDiffToPositionAhead" in stats
+            ):
+                stats_entry = stats
+            else:
+                try:
+                    first_key = min(
+                        stats.keys(),
+                        key=lambda key: int(key)
+                    )
+                except (ValueError, TypeError):
+                    first_key = next(iter(stats))
+
+                stats_entry = stats.get(first_key, {})
+
+        if isinstance(stats_entry, dict):
+            if not gap:
+                gap = clean_gap(
+                    stats_entry.get("TimeDiffToFastest", "")
+                )
+
+            if not interval:
+                interval = clean_gap(
+                    stats_entry.get(
+                        "TimeDifftoPositionAhead",
+                        stats_entry.get("TimeDiffToPositionAhead", ""),
+                    )
+                )
 
         driver["interval"] = interval
         driver["gap"] = gap

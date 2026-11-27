@@ -115,6 +115,7 @@ state = {
     "last_error": "",
     "last_topics": [],
     "last_feed_shape": "",
+    "subscription_snapshot_received": False,
 }
 
 
@@ -475,21 +476,11 @@ def handle_topic(topic, payload):
 
 
 def extract_feed_entries(message):
-    """
-    Accepte plusieurs formats possibles des messages SignalR :
-    - [topic, payload]
-    - [{"topic": topic, "data": payload}]
-    - {"M": "feed", "A": [topic, payload]}
-    - {"A": [[topic, payload]]}
-    """
-
-    entries = []
-
     if isinstance(message, str):
         try:
             message = json.loads(message)
         except json.JSONDecodeError:
-            return entries
+            return []
 
     if isinstance(message, dict):
         arguments = message.get("A")
@@ -500,6 +491,8 @@ def extract_feed_entries(message):
                 and isinstance(arguments[0], str)
             ):
                 return [arguments]
+
+            entries = []
 
             for argument in arguments:
                 entries.extend(extract_feed_entries(argument))
@@ -516,16 +509,20 @@ def extract_feed_entries(message):
 
             return [[topic, payload]]
 
-        return entries
+        return []
 
     if isinstance(message, (list, tuple)):
         if len(message) >= 2 and isinstance(message[0], str):
             return [message]
 
+        entries = []
+
         for item in message:
             entries.extend(extract_feed_entries(item))
 
-    return entries
+        return entries
+
+    return []
 
 
 def handle_feed_message(message):
@@ -558,6 +555,32 @@ def handle_feed_message(message):
 
             if isinstance(topic, str):
                 handle_topic(topic, payload)
+
+
+def handle_subscription_result(message):
+    """
+    Traite la réponse initiale renvoyée par Subscribe.
+    Cette réponse est différente des événements feed classiques.
+    """
+
+    result = getattr(message, "result", None)
+
+    if isinstance(result, dict):
+        with state_lock:
+            state["subscription_snapshot_received"] = True
+
+            for topic, payload in result.items():
+                if isinstance(topic, str):
+                    handle_topic(topic, payload)
+
+        logger.info(
+            "Initial F1 subscription snapshot received: %s",
+            ", ".join(result.keys()),
+        )
+        return
+
+    # Secours si la bibliothèque renvoie un format différent.
+    handle_feed_message(message)
 
 
 def snapshot():
@@ -712,6 +735,7 @@ def run_signalr_connection():
         with state_lock:
             state["connected"] = True
             state["last_error"] = ""
+            state["subscription_snapshot_received"] = False
 
         connected_event.set()
 
@@ -737,7 +761,14 @@ def run_signalr_connection():
             "SignalR connection did not open within 30 seconds"
         )
 
-    connection.send("Subscribe", [TOPICS])
+    # IMPORTANT :
+    # Le callback on_invocation récupère la réponse initiale
+    # de Subscribe, qui contient notamment DriverList et SessionInfo.
+    connection.send(
+        "Subscribe",
+        [TOPICS],
+        on_invocation=handle_subscription_result,
+    )
 
     while not stop_event.is_set() and not closed_event.wait(timeout=1):
         pass
@@ -831,6 +862,9 @@ def debug():
             "driver_samples": driver_samples,
             "last_topics": state["last_topics"],
             "last_feed_shape": state["last_feed_shape"],
+            "subscription_snapshot_received": (
+                state["subscription_snapshot_received"]
+            ),
             "session": state["session"],
             "track": state["track"],
             "last_update": last_update,

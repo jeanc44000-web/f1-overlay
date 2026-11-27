@@ -1,7 +1,7 @@
 
 import json
 import logging
-import osD
+import os
 import threading
 import time
 from datetime import datetime, timezone

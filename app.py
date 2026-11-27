@@ -1,13 +1,14 @@
 
 import json
 import logging
-import os
+import osD
 import threading
 import time
 from datetime import datetime, timezone
 
 import requests
 from flask import Flask, jsonify, render_template
+from f2academy import register_f2academy
 from signalrcore.hub_connection_builder import HubConnectionBuilder
 from fastf1.internals.f1account import get_token
 
@@ -712,6 +713,8 @@ def health():
         "connected": state["connected"],
     })
 
+
+register_f2academy(app)
 
 start_f1_connection()
 

@@ -81,7 +81,7 @@ DEFAULT_DRIVERS = [
     {"position": 13, "tla": "ALB", "team": "Williams", "team_color": "#1868db"},
     {"position": 14, "tla": "SAI", "team": "Williams", "team_color": "#1868db"},
     {"position": 15, "tla": "LAW", "team": "Racing Bulls", "team_color": "#6692ff"},
-    {"position": 16, "tla": "TSU", "team": "Racing Bulls", "team_color": "#6692ff"},
+    {"position": 16, "tla": "LIN", "team": "Racing Bulls", "team_color": "#6692ff"},
     {"position": 17, "tla": "OCO", "team": "Haas", "team_color": "#b6babd"},
     {"position": 18, "tla": "BEA", "team": "Haas", "team_color": "#b6babd"},
     {"position": 19, "tla": "HUL", "team": "Audi", "team_color": "#bb0a30"},

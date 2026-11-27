@@ -117,6 +117,11 @@ state = {
     "last_topics": [],
     "last_feed_shape": "",
     "subscription_snapshot_received": False,
+
+    # Diagnostic et priorité du chrono.
+    "extrapolated_clock_received": False,
+    "extrapolated_clock_raw": {},
+    "last_extrapolated_clock_update": 0,
 }
 
 
@@ -269,10 +274,6 @@ def update_timing_data(data):
             driver.get("Stats", info.get("Stats", {}))
         )
 
-        # IMPORTANT :
-        # Dans le flux reçu, ces deux champs sont directement
-        # dans les données du pilote, et non dans Stats.
-
         gap_to_fastest = first_non_empty(
             driver.get("TimeDiffToFastest"),
             driver.get("GapToLeader"),
@@ -292,8 +293,6 @@ def update_timing_data(data):
 
         driver["gap_to_fastest"] = gap_to_fastest
         driver["interval"] = interval_to_ahead
-
-        # Compatibilité avec l'affichage existant.
         driver["gap"] = gap_to_fastest
 
         driver["lap"] = unwrap_value(
@@ -415,10 +414,18 @@ def update_session_info(data):
     }
 
     if session_name:
-        state["session"]["name"] = name_map.get(
+        new_name = name_map.get(
             session_name,
             str(session_name).upper(),
         )
+
+        if new_name != state["session"]["name"]:
+            state["extrapolated_clock_received"] = False
+            state["extrapolated_clock_raw"] = {}
+            state["last_extrapolated_clock_update"] = 0
+            state["session"]["time_remaining"] = ""
+
+        state["session"]["name"] = new_name
 
 
 def update_session_data(data):
@@ -435,7 +442,10 @@ def update_session_data(data):
     if phase:
         state["session"]["phase"] = str(phase)
 
-    if remaining:
+    # SessionData sert uniquement de secours.
+    # Dès qu'ExtrapolatedClock a fourni une valeur,
+    # SessionData ne peut plus écraser le chrono.
+    if remaining and not state["extrapolated_clock_received"]:
         state["session"]["time_remaining"] = str(remaining)
 
 
@@ -451,6 +461,9 @@ def update_extrapolated_clock(data):
 
     if remaining:
         state["session"]["time_remaining"] = remaining
+        state["extrapolated_clock_received"] = True
+        state["extrapolated_clock_raw"] = data
+        state["last_extrapolated_clock_update"] = time.time()
 
 
 def update_lap_count(data):
@@ -972,7 +985,6 @@ def debug():
                 "position": driver.get("position", ""),
                 "team": driver.get("team", ""),
 
-                # Valeurs réellement reçues du flux :
                 "raw_time_diff_fastest": clean_gap(
                     driver.get("TimeDiffToFastest", "")
                 ),
@@ -980,11 +992,9 @@ def debug():
                     driver.get("TimeDiffToPositionAhead", "")
                 ),
 
-                # Valeurs calculées par notre API :
                 "gap_to_fastest": driver.get("gap_to_fastest", ""),
                 "interval": driver.get("interval", ""),
 
-                # Ancien emplacement Stats, conservé pour diagnostic :
                 "stats_time_diff_fastest": clean_gap(
                     stats_entry.get("TimeDiffToFastest", "")
                 ),
@@ -1005,6 +1015,26 @@ def debug():
             ),
             "session": state["session"],
             "track": state["track"],
+
+            # Diagnostic du chrono :
+            "extrapolated_clock_received": (
+                state["extrapolated_clock_received"]
+            ),
+            "extrapolated_clock_raw": (
+                state["extrapolated_clock_raw"]
+            ),
+            "last_extrapolated_clock_update": (
+                state["last_extrapolated_clock_update"]
+            ),
+            "extrapolated_clock_age_seconds": (
+                round(
+                    time.time() - state["last_extrapolated_clock_update"],
+                    1,
+                )
+                if state["last_extrapolated_clock_update"]
+                else None
+            ),
+
             "last_update": last_update,
             "last_message_age_seconds": (
                 round(time.time() - last_update, 1)

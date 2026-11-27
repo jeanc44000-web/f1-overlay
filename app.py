@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 
 import requests
 from flask import Flask, jsonify, render_template
-from f2academy import register_f2academy
 from signalrcore.hub_connection_builder import HubConnectionBuilder
 from fastf1.internals.f1account import get_token
 
@@ -82,7 +81,7 @@ DEFAULT_DRIVERS = [
     {"position": 13, "tla": "ALB", "team": "Williams", "team_color": "#1868db"},
     {"position": 14, "tla": "SAI", "team": "Williams", "team_color": "#1868db"},
     {"position": 15, "tla": "LAW", "team": "Racing Bulls", "team_color": "#6692ff"},
-    {"position": 16, "tla": "LIN", "team": "Racing Bulls", "team_color": "#6692ff"},
+    {"position": 16, "tla": "TSU", "team": "Racing Bulls", "team_color": "#6692ff"},
     {"position": 17, "tla": "OCO", "team": "Haas", "team_color": "#b6babd"},
     {"position": 18, "tla": "BEA", "team": "Haas", "team_color": "#b6babd"},
     {"position": 19, "tla": "HUL", "team": "Audi", "team_color": "#bb0a30"},
@@ -713,8 +712,6 @@ def health():
         "connected": state["connected"],
     })
 
-
-register_f2academy(app)
 
 start_f1_connection()
 

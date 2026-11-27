@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -134,6 +135,16 @@ def clean_gap(value):
     return str(value).replace("+", "").strip()
 
 
+def first_non_empty(*values):
+    for value in values:
+        cleaned = clean_gap(value)
+
+        if cleaned:
+            return cleaned
+
+    return ""
+
+
 def normalize_team(team_name, tla, team_colour=None):
     if team_colour:
         colour = str(team_colour)
@@ -168,6 +179,45 @@ def topic_lines(data):
         return data["Lines"]
 
     return data
+
+
+def get_stats_entry(stats):
+    if isinstance(stats, list):
+        entries = stats
+
+    elif isinstance(stats, dict):
+        if any(
+            key in stats
+            for key in (
+                "TimeDiffToFastest",
+                "TimeDifftoPositionAhead",
+                "TimeDiffToPositionAhead",
+            )
+        ):
+            entries = [stats]
+        else:
+            try:
+                entries = [
+                    stats[key]
+                    for key in sorted(
+                        stats.keys(),
+                        key=lambda item: int(item),
+                    )
+                ]
+            except (ValueError, TypeError):
+                entries = list(stats.values())
+
+    else:
+        entries = []
+
+    return next(
+        (
+            entry
+            for entry in entries
+            if isinstance(entry, dict)
+        ),
+        {},
+    )
 
 
 def update_driver_list(data):
@@ -229,60 +279,31 @@ def update_timing_data(data):
             driver.get("Position", driver.get("position", ""))
         )
 
-        interval = clean_gap(
-            driver.get(
-                "IntervalToPositionAhead",
-                driver.get("Interval", driver.get("interval", "")),
-            )
+        stats_entry = get_stats_entry(
+            driver.get("Stats", info.get("Stats", {}))
         )
 
-        gap = clean_gap(
-            driver.get("GapToLeader", driver.get("gap", ""))
+        # Écart au pilote le plus rapide / leader.
+        gap_to_fastest = first_non_empty(
+            driver.get("GapToLeader"),
+            driver.get("gap_to_fastest"),
+            stats_entry.get("TimeDiffToFastest"),
         )
 
-        stats = driver.get("Stats", {})
-        stats_entries = []
-
-        if isinstance(stats, list):
-            stats_entries = stats
-
-        elif isinstance(stats, dict):
-            if any(
-                key in stats
-                for key in (
-                    "TimeDiffToFastest",
-                    "TimeDifftoPositionAhead",
-                    "TimeDiffToPositionAhead",
-                )
-            ):
-                stats_entries = [stats]
-            else:
-                stats_entries = list(stats.values())
-
-        stats_entry = next(
-            (
-                entry
-                for entry in stats_entries
-                if isinstance(entry, dict)
-            ),
-            {},
+        # Intervalle avec le pilote précédent.
+        interval_to_ahead = first_non_empty(
+            driver.get("IntervalToPositionAhead"),
+            driver.get("Interval"),
+            driver.get("interval"),
+            stats_entry.get("TimeDifftoPositionAhead"),
+            stats_entry.get("TimeDiffToPositionAhead"),
         )
 
-        if not gap:
-            gap = clean_gap(
-                stats_entry.get("TimeDiffToFastest", "")
-            )
+        driver["gap_to_fastest"] = gap_to_fastest
+        driver["interval"] = interval_to_ahead
 
-        if not interval:
-            interval = clean_gap(
-                stats_entry.get(
-                    "TimeDifftoPositionAhead",
-                    stats_entry.get("TimeDiffToPositionAhead", ""),
-                )
-            )
-
-        driver["interval"] = interval
-        driver["gap"] = gap
+        # On conserve aussi les champs historiques.
+        driver["gap"] = gap_to_fastest
 
         driver["lap"] = unwrap_value(
             driver.get("NumberOfLaps", driver.get("lap", ""))
@@ -293,6 +314,63 @@ def update_timing_data(data):
         driver["pit"] = str(unwrap_value(in_pit)).lower() in (
             "true", "1", "yes"
         )
+
+
+def parse_gap_seconds(value):
+    """
+    Convertit un écart simple comme 0.456 ou +0.456 en secondes.
+    Ne tente pas de convertir les valeurs du type '1 LAP'.
+    """
+
+    value = clean_gap(value)
+
+    if not value:
+        return None
+
+    match = re.fullmatch(r"[+-]?\d+(?:\.\d+)?", value)
+
+    if not match:
+        return None
+
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def fill_missing_qualifying_intervals(drivers):
+    """
+    Si le flux ne fournit pas directement l'intervalle entre deux pilotes,
+    on peut le reconstruire à partir de leurs écarts au meilleur temps.
+    """
+
+    ordered = sorted(
+        drivers,
+        key=lambda driver: driver.get("position", 999),
+    )
+
+    previous_gap = None
+
+    for driver in ordered:
+        current_gap = parse_gap_seconds(
+            driver.get("gap_to_fastest", "")
+        )
+
+        if current_gap is None:
+            previous_gap = None
+            continue
+
+        if driver.get("position") == 1:
+            previous_gap = current_gap
+            continue
+
+        if not driver.get("interval") and previous_gap is not None:
+            difference = current_gap - previous_gap
+
+            if difference >= 0:
+                driver["interval"] = f"{difference:.3f}"
+
+        previous_gap = current_gap
 
 
 def update_tyres(data):
@@ -349,6 +427,8 @@ def update_session_info(data):
         "Qualifying 1": "Q1",
         "Qualifying 2": "Q2",
         "Qualifying 3": "Q3",
+        "Sprint Qualifying": "SPRINT QUALI",
+        "Sprint Shootout": "SPRINT SHOOTOUT",
         "Race": "RACE",
         "Sprint": "SPRINT",
     }
@@ -559,28 +639,53 @@ def handle_feed_message(message):
 
 def handle_subscription_result(message):
     """
-    Traite la réponse initiale renvoyée par Subscribe.
-    Cette réponse est différente des événements feed classiques.
+    FastF1 renvoie la réponse initiale de Subscribe sous forme
+    d'un CompletionMessage contenant un dictionnaire de sujets.
     """
 
-    result = getattr(message, "result", None)
+    messages = message if isinstance(message, list) else [message]
+    received_snapshot = False
 
-    if isinstance(result, dict):
-        with state_lock:
-            state["subscription_snapshot_received"] = True
+    with state_lock:
+        for item in messages:
+            result = getattr(item, "result", None)
+
+            if not isinstance(result, dict):
+                continue
 
             for topic, payload in result.items():
                 if isinstance(topic, str):
                     handle_topic(topic, payload)
 
-        logger.info(
-            "Initial F1 subscription snapshot received: %s",
-            ", ".join(result.keys()),
-        )
-        return
+            received_snapshot = True
 
-    # Secours si la bibliothèque renvoie un format différent.
-    handle_feed_message(message)
+        if received_snapshot:
+            state["subscription_snapshot_received"] = True
+
+    if received_snapshot:
+        logger.info("Initial F1 subscription snapshot received")
+    else:
+        logger.warning(
+            "Subscribe callback received no usable topic snapshot: %s",
+            type(message).__name__,
+        )
+
+
+def session_display_mode(session_name):
+    name = str(session_name or "").upper()
+
+    if name in ("FP1", "FP2", "FP3"):
+        return "practice"
+
+    if (
+        name in ("QUALI", "Q1", "Q2", "Q3")
+        or "QUALIFY" in name
+        or "SPRINT QUALI" in name
+        or "SPRINT SHOOTOUT" in name
+    ):
+        return "qualifying"
+
+    return "other"
 
 
 def snapshot():
@@ -612,7 +717,11 @@ def snapshot():
                         "#9aa0a6",
                     ),
                     "interval": driver.get("interval", ""),
-                    "gap": driver.get("gap", ""),
+                    "gap_to_fastest": driver.get(
+                        "gap_to_fastest",
+                        driver.get("gap", ""),
+                    ),
+                    "gap": "",
                     "tyre": driver.get("tyre", ""),
                     "lap": driver.get("lap", ""),
                     "pit": driver.get("pit", False),
@@ -623,6 +732,25 @@ def snapshot():
                 })
 
             drivers.sort(key=lambda item: item["position"])
+
+            mode = session_display_mode(session.get("name", ""))
+
+            if mode == "qualifying":
+                fill_missing_qualifying_intervals(drivers)
+
+                for driver in drivers:
+                    driver["gap"] = driver["interval"]
+
+            elif mode == "practice":
+                for driver in drivers:
+                    driver["gap"] = driver["gap_to_fastest"]
+
+            else:
+                for driver in drivers:
+                    driver["gap"] = (
+                        driver["gap_to_fastest"]
+                        or driver["interval"]
+                    )
 
             phase = str(session.get("phase", "")).upper()
 
@@ -655,6 +783,7 @@ def snapshot():
         "team": item["team"],
         "team_color": item["team_color"],
         "interval": "",
+        "gap_to_fastest": "",
         "gap": "",
         "tyre": "",
         "lap": "",
@@ -761,9 +890,6 @@ def run_signalr_connection():
             "SignalR connection did not open within 30 seconds"
         )
 
-    # IMPORTANT :
-    # Le callback on_invocation récupère la réponse initiale
-    # de Subscribe, qui contient notamment DriverList et SessionInfo.
     connection.send(
         "Subscribe",
         [TOPICS],
@@ -847,12 +973,22 @@ def debug():
 
         driver_samples = {}
 
-        for number, driver in list(state["drivers"].items())[:5]:
+        for number, driver in list(state["drivers"].items())[:8]:
+            stats_entry = get_stats_entry(driver.get("Stats", {}))
+
             driver_samples[number] = {
                 "keys": list(driver.keys()),
                 "tla": driver.get("tla", ""),
                 "position": driver.get("position", ""),
                 "team": driver.get("team", ""),
+                "gap_to_fastest": driver.get("gap_to_fastest", ""),
+                "interval": driver.get("interval", ""),
+                "stats_time_diff_fastest": clean_gap(
+                    stats_entry.get("TimeDiffToFastest", "")
+                ),
+                "stats_time_diff_ahead": clean_gap(
+                    stats_entry.get("TimeDifftoPositionAhead", "")
+                ),
             }
 
         return jsonify({

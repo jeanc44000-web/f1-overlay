@@ -113,6 +113,8 @@ state = {
     "auth_ok": False,
     "last_update": 0,
     "last_error": "",
+    "last_topics": [],
+    "last_feed_shape": "",
 }
 
 
@@ -124,16 +126,20 @@ def unwrap_value(value):
 
 def clean_gap(value):
     value = unwrap_value(value)
+
     if value is None:
         return ""
+
     return str(value).replace("+", "").strip()
 
 
 def normalize_team(team_name, tla, team_colour=None):
     if team_colour:
         colour = str(team_colour)
+
         if not colour.startswith("#"):
             colour = f"#{colour}"
+
         return team_name or "F1", colour
 
     team_name = (team_name or "").strip()
@@ -159,6 +165,7 @@ def apply_patch(target, patch):
 def topic_lines(data):
     if isinstance(data, dict) and isinstance(data.get("Lines"), dict):
         return data["Lines"]
+
     return data
 
 
@@ -174,7 +181,12 @@ def update_driver_list(data):
 
         driver = state["drivers"].setdefault(str(number), {})
 
-        tla = info.get("Tla") or info.get("TLA") or driver.get("tla", "")
+        tla = (
+            info.get("Tla")
+            or info.get("TLA")
+            or driver.get("tla", "")
+        )
+
         team_name = (
             info.get("TeamName")
             or info.get("Team")
@@ -216,7 +228,6 @@ def update_timing_data(data):
             driver.get("Position", driver.get("position", ""))
         )
 
-        # Récupération des écarts habituels.
         interval = clean_gap(
             driver.get(
                 "IntervalToPositionAhead",
@@ -228,44 +239,46 @@ def update_timing_data(data):
             driver.get("GapToLeader", driver.get("gap", ""))
         )
 
-        # Secours pour les séances où les écarts sont dans Stats.
         stats = driver.get("Stats", {})
-        stats_entry = {}
+        stats_entries = []
 
-        if isinstance(stats, list) and stats:
-            stats_entry = stats[0]
+        if isinstance(stats, list):
+            stats_entries = stats
 
-        elif isinstance(stats, dict) and stats:
-            if (
-                "TimeDiffToFastest" in stats
-                or "TimeDifftoPositionAhead" in stats
-                or "TimeDiffToPositionAhead" in stats
+        elif isinstance(stats, dict):
+            if any(
+                key in stats
+                for key in (
+                    "TimeDiffToFastest",
+                    "TimeDifftoPositionAhead",
+                    "TimeDiffToPositionAhead",
+                )
             ):
-                stats_entry = stats
+                stats_entries = [stats]
             else:
-                try:
-                    first_key = min(
-                        stats.keys(),
-                        key=lambda key: int(key)
-                    )
-                except (ValueError, TypeError):
-                    first_key = next(iter(stats))
+                stats_entries = list(stats.values())
 
-                stats_entry = stats.get(first_key, {})
+        stats_entry = next(
+            (
+                entry
+                for entry in stats_entries
+                if isinstance(entry, dict)
+            ),
+            {},
+        )
 
-        if isinstance(stats_entry, dict):
-            if not gap:
-                gap = clean_gap(
-                    stats_entry.get("TimeDiffToFastest", "")
+        if not gap:
+            gap = clean_gap(
+                stats_entry.get("TimeDiffToFastest", "")
+            )
+
+        if not interval:
+            interval = clean_gap(
+                stats_entry.get(
+                    "TimeDifftoPositionAhead",
+                    stats_entry.get("TimeDiffToPositionAhead", ""),
                 )
-
-            if not interval:
-                interval = clean_gap(
-                    stats_entry.get(
-                        "TimeDifftoPositionAhead",
-                        stats_entry.get("TimeDiffToPositionAhead", ""),
-                    )
-                )
+            )
 
         driver["interval"] = interval
         driver["gap"] = gap
@@ -296,7 +309,10 @@ def update_tyres(data):
 
         if isinstance(stints, dict) and stints:
             try:
-                last_key = max(stints.keys(), key=lambda key: int(key))
+                last_key = max(
+                    stints.keys(),
+                    key=lambda key: int(key),
+                )
             except (ValueError, TypeError):
                 last_key = list(stints.keys())[-1]
 
@@ -449,23 +465,89 @@ def handle_topic(topic, payload):
     elif topic == "LapCount":
         update_lap_count(payload)
 
+    if topic not in state["last_topics"]:
+        state["last_topics"].append(topic)
+
+        if len(state["last_topics"]) > 30:
+            state["last_topics"].pop(0)
+
     state["last_update"] = time.time()
 
 
-def handle_feed_message(message):
-    if isinstance(message, list):
-        if len(message) >= 2 and isinstance(message[0], str):
-            entries = [message]
-        else:
-            entries = message
-    else:
-        entries = [message]
+def extract_feed_entries(message):
+    """
+    Accepte plusieurs formats possibles des messages SignalR :
+    - [topic, payload]
+    - [{"topic": topic, "data": payload}]
+    - {"M": "feed", "A": [topic, payload]}
+    - {"A": [[topic, payload]]}
+    """
 
+    entries = []
+
+    if isinstance(message, str):
+        try:
+            message = json.loads(message)
+        except json.JSONDecodeError:
+            return entries
+
+    if isinstance(message, dict):
+        arguments = message.get("A")
+
+        if isinstance(arguments, list):
+            if (
+                len(arguments) >= 2
+                and isinstance(arguments[0], str)
+            ):
+                return [arguments]
+
+            for argument in arguments:
+                entries.extend(extract_feed_entries(argument))
+
+            return entries
+
+        topic = message.get("topic") or message.get("Category")
+
+        if isinstance(topic, str):
+            payload = message.get(
+                "data",
+                message.get("Message"),
+            )
+
+            return [[topic, payload]]
+
+        return entries
+
+    if isinstance(message, (list, tuple)):
+        if len(message) >= 2 and isinstance(message[0], str):
+            return [message]
+
+        for item in message:
+            entries.extend(extract_feed_entries(item))
+
+    return entries
+
+
+def handle_feed_message(message):
     with state_lock:
+        state["last_feed_shape"] = type(message).__name__
+
+        entries = extract_feed_entries(message)
+
+        if not entries:
+            logger.debug(
+                "SignalR message format not recognized: %s",
+                str(message)[:500],
+            )
+            return
+
         for entry in entries:
             if isinstance(entry, dict):
                 topic = entry.get("topic") or entry.get("Category")
-                payload = entry.get("data", entry.get("Message"))
+                payload = entry.get(
+                    "data",
+                    entry.get("Message"),
+                )
 
             elif isinstance(entry, (list, tuple)) and len(entry) >= 2:
                 topic = entry[0]
@@ -732,10 +814,23 @@ def debug():
     with state_lock:
         last_update = state["last_update"]
 
+        driver_samples = {}
+
+        for number, driver in list(state["drivers"].items())[:5]:
+            driver_samples[number] = {
+                "keys": list(driver.keys()),
+                "tla": driver.get("tla", ""),
+                "position": driver.get("position", ""),
+                "team": driver.get("team", ""),
+            }
+
         return jsonify({
             "connected": state["connected"],
             "auth_ok": state["auth_ok"],
             "drivers": len(state["drivers"]),
+            "driver_samples": driver_samples,
+            "last_topics": state["last_topics"],
+            "last_feed_shape": state["last_feed_shape"],
             "session": state["session"],
             "track": state["track"],
             "last_update": last_update,

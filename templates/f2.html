@@ -1,0 +1,43 @@
+
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>F2 Live Timing</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='series.css') }}">
+</head>
+<body>
+    <main class="overlay" data-series="f2" data-api="/api/f2">
+        <header class="header">
+            <div class="series-label">FIA FORMULA 2</div>
+            <div class="session-status" id="session-status">CONNEXION...</div>
+        </header>
+
+        <section class="timing-panel">
+            <div class="timing-heading">
+                <h1>LIVE TIMING</h1>
+                <span id="last-update">En attente des données</span>
+            </div>
+
+            <div class="table-wrapper">
+                <table>
+                    <thead id="timing-head"></thead>
+                    <tbody id="timing-body">
+                        <tr>
+                            <td class="loading">Connexion au chronométrage...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <footer>
+            <span>F2</span>
+            <span>LIVE TIMING</span>
+        </footer>
+    </main>
+
+    <script src="{{ url_for('static', filename='series.js') }}"></script>
+</body>
+</html>

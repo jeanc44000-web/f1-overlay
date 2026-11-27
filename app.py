@@ -138,20 +138,16 @@ def clean_gap(value):
 def first_non_empty(*values):
     for value in values:
         cleaned = clean_gap(value)
-
         if cleaned:
             return cleaned
-
     return ""
 
 
 def normalize_team(team_name, tla, team_colour=None):
     if team_colour:
         colour = str(team_colour)
-
         if not colour.startswith("#"):
             colour = f"#{colour}"
-
         return team_name or "F1", colour
 
     team_name = (team_name or "").strip()
@@ -177,14 +173,12 @@ def apply_patch(target, patch):
 def topic_lines(data):
     if isinstance(data, dict) and isinstance(data.get("Lines"), dict):
         return data["Lines"]
-
     return data
 
 
 def get_stats_entry(stats):
     if isinstance(stats, list):
         entries = stats
-
     elif isinstance(stats, dict):
         if any(
             key in stats
@@ -199,23 +193,15 @@ def get_stats_entry(stats):
             try:
                 entries = [
                     stats[key]
-                    for key in sorted(
-                        stats.keys(),
-                        key=lambda item: int(item),
-                    )
+                    for key in sorted(stats.keys(), key=lambda item: int(item))
                 ]
             except (ValueError, TypeError):
                 entries = list(stats.values())
-
     else:
         entries = []
 
     return next(
-        (
-            entry
-            for entry in entries
-            if isinstance(entry, dict)
-        ),
+        (entry for entry in entries if isinstance(entry, dict)),
         {},
     )
 
@@ -283,15 +269,20 @@ def update_timing_data(data):
             driver.get("Stats", info.get("Stats", {}))
         )
 
-        # Écart au pilote le plus rapide / leader.
+        # IMPORTANT :
+        # Dans le flux reçu, ces deux champs sont directement
+        # dans les données du pilote, et non dans Stats.
+
         gap_to_fastest = first_non_empty(
+            driver.get("TimeDiffToFastest"),
             driver.get("GapToLeader"),
             driver.get("gap_to_fastest"),
             stats_entry.get("TimeDiffToFastest"),
         )
 
-        # Intervalle avec le pilote précédent.
         interval_to_ahead = first_non_empty(
+            driver.get("TimeDiffToPositionAhead"),
+            driver.get("TimeDifftoPositionAhead"),
             driver.get("IntervalToPositionAhead"),
             driver.get("Interval"),
             driver.get("interval"),
@@ -302,7 +293,7 @@ def update_timing_data(data):
         driver["gap_to_fastest"] = gap_to_fastest
         driver["interval"] = interval_to_ahead
 
-        # On conserve aussi les champs historiques.
+        # Compatibilité avec l'affichage existant.
         driver["gap"] = gap_to_fastest
 
         driver["lap"] = unwrap_value(
@@ -317,11 +308,6 @@ def update_timing_data(data):
 
 
 def parse_gap_seconds(value):
-    """
-    Convertit un écart simple comme 0.456 ou +0.456 en secondes.
-    Ne tente pas de convertir les valeurs du type '1 LAP'.
-    """
-
     value = clean_gap(value)
 
     if not value:
@@ -339,11 +325,6 @@ def parse_gap_seconds(value):
 
 
 def fill_missing_qualifying_intervals(drivers):
-    """
-    Si le flux ne fournit pas directement l'intervalle entre deux pilotes,
-    on peut le reconstruire à partir de leurs écarts au meilleur temps.
-    """
-
     ordered = sorted(
         drivers,
         key=lambda driver: driver.get("position", 999),
@@ -458,6 +439,20 @@ def update_session_data(data):
         state["session"]["time_remaining"] = str(remaining)
 
 
+def update_extrapolated_clock(data):
+    if not isinstance(data, dict):
+        return
+
+    remaining = first_non_empty(
+        data.get("Remaining"),
+        data.get("RemainingTime"),
+        data.get("TimeRemaining"),
+    )
+
+    if remaining:
+        state["session"]["time_remaining"] = remaining
+
+
 def update_lap_count(data):
     if not isinstance(data, dict):
         return
@@ -531,6 +526,9 @@ def handle_topic(topic, payload):
     elif topic == "SessionData":
         update_session_data(payload)
 
+    elif topic == "ExtrapolatedClock":
+        update_extrapolated_clock(payload)
+
     elif topic == "SessionStatus":
         if isinstance(payload, dict):
             status = payload.get("Status", "")
@@ -566,10 +564,7 @@ def extract_feed_entries(message):
         arguments = message.get("A")
 
         if isinstance(arguments, list):
-            if (
-                len(arguments) >= 2
-                and isinstance(arguments[0], str)
-            ):
+            if len(arguments) >= 2 and isinstance(arguments[0], str):
                 return [arguments]
 
             entries = []
@@ -638,11 +633,6 @@ def handle_feed_message(message):
 
 
 def handle_subscription_result(message):
-    """
-    FastF1 renvoie la réponse initiale de Subscribe sous forme
-    d'un CompletionMessage contenant un dictionnaire de sujets.
-    """
-
     messages = message if isinstance(message, list) else [message]
     received_snapshot = False
 
@@ -981,8 +971,20 @@ def debug():
                 "tla": driver.get("tla", ""),
                 "position": driver.get("position", ""),
                 "team": driver.get("team", ""),
+
+                # Valeurs réellement reçues du flux :
+                "raw_time_diff_fastest": clean_gap(
+                    driver.get("TimeDiffToFastest", "")
+                ),
+                "raw_time_diff_ahead": clean_gap(
+                    driver.get("TimeDiffToPositionAhead", "")
+                ),
+
+                # Valeurs calculées par notre API :
                 "gap_to_fastest": driver.get("gap_to_fastest", ""),
                 "interval": driver.get("interval", ""),
+
+                # Ancien emplacement Stats, conservé pour diagnostic :
                 "stats_time_diff_fastest": clean_gap(
                     stats_entry.get("TimeDiffToFastest", "")
                 ),

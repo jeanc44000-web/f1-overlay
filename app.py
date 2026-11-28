@@ -267,6 +267,12 @@ def update_timing_data(data):
         driver = state["drivers"].setdefault(str(number), {})
         apply_patch(driver, info)
 
+        # BestLapTime est fourni par TimingData sous la forme
+        # {"Value": "1:23.456", "Lap": 12}.
+        driver["best_time"] = unwrap_value(
+            driver.get("BestLapTime", driver.get("best_time", ""))
+        )
+
         driver["position"] = unwrap_value(
             driver.get("Position", driver.get("position", ""))
         )
@@ -440,6 +446,8 @@ def update_session_info(data):
                 "Position",
                 "position",
                 "Stats",
+                "BestLapTime",
+                "best_time",
                 "TimeDiffToFastest",
                 "GapToLeader",
                 "gap_to_fastest",
@@ -512,9 +520,22 @@ def update_extrapolated_clock(data):
     if not isinstance(data, dict):
         return
 
-    # ExtrapolatedClock peut déjà compter avant le départ officiel.
-    # On ignore ces valeurs tant que SessionStatus n'indique pas Started.
-    if not state["session_started"]:
+    # Le flux F1 peut envoyer un premier Remaining bien avant le départ,
+    # avec Extrapolating = false. On ne l'affiche pas.
+    # Le compte à rebours devient exploitable lorsque F1 passe à true.
+    extrapolating = data.get("Extrapolating")
+
+    if isinstance(extrapolating, str):
+        extrapolating = extrapolating.strip().lower() == "true"
+
+    if extrapolating is False:
+        state["session"]["time_remaining"] = ""
+        state["extrapolated_clock_received"] = False
+        state["extrapolated_clock_raw"] = data
+        state["last_extrapolated_clock_update"] = time.time()
+        return
+
+    if extrapolating is not True:
         return
 
     remaining = first_non_empty(
@@ -616,12 +637,6 @@ def handle_topic(topic, payload):
             status_text = str(status).strip()
             state["session"]["status"] = status_text
             state["session_started"] = status_text.upper() == "STARTED"
-
-            if not state["session_started"]:
-                state["session"]["time_remaining"] = ""
-                state["extrapolated_clock_received"] = False
-                state["extrapolated_clock_raw"] = {}
-                state["last_extrapolated_clock_update"] = 0
 
     elif topic == "TrackStatus":
         update_track_status(payload)
@@ -797,6 +812,7 @@ def snapshot():
                         driver.get("gap", ""),
                     ),
                     "gap": "",
+                    "best_time": driver.get("best_time", ""),
                     "tyre": driver.get("tyre", ""),
                     "lap": driver.get("lap", ""),
                     "pit": driver.get("pit", False),
@@ -860,6 +876,7 @@ def snapshot():
         "interval": "",
         "gap_to_fastest": "",
         "gap": "",
+        "best_time": "",
         "tyre": "",
         "lap": "",
         "pit": False,

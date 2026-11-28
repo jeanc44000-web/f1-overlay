@@ -117,9 +117,16 @@ state = {
     "last_topics": [],
     "last_feed_shape": "",
     "subscription_snapshot_received": False,
-    "session_started": False,
 
-    # Diagnostic et priorité du chrono.
+    # État du chronomètre.
+    "session_started": False,
+    "session_has_started": False,
+    "clock_anchor_seconds": None,
+    "clock_anchor_time": None,
+    "clock_frozen_seconds": None,
+    "clock_source": "",
+
+    # Diagnostic du flux ExtrapolatedClock.
     "extrapolated_clock_received": False,
     "extrapolated_clock_raw": {},
     "last_extrapolated_clock_update": 0,
@@ -147,6 +154,72 @@ def first_non_empty(*values):
         if cleaned:
             return cleaned
     return ""
+
+
+def parse_time_seconds(value):
+    value = unwrap_value(value)
+
+    if value is None or value == "":
+        return None
+
+    if isinstance(value, (int, float)):
+        return max(0.0, float(value))
+
+    text = str(value).strip()
+
+    if not text:
+        return None
+
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return max(0.0, float(text))
+
+    parts = text.split(":")
+
+    try:
+        numbers = [float(part) for part in parts]
+    except (TypeError, ValueError):
+        return None
+
+    if len(numbers) == 2:
+        minutes, seconds = numbers
+        return max(0.0, minutes * 60 + seconds)
+
+    if len(numbers) == 3:
+        hours, minutes, seconds = numbers
+        return max(0.0, hours * 3600 + minutes * 60 + seconds)
+
+    return None
+
+
+def format_time_seconds(total_seconds):
+    seconds = max(0, int(total_seconds))
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    remaining = seconds % 60
+
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{remaining:02d}"
+
+    return f"{minutes:02d}:{remaining:02d}"
+
+
+def default_session_duration(session_name, phase):
+    name = str(session_name or "").upper()
+    phase = str(phase or "").upper()
+
+    if phase == "Q1" or name == "Q1":
+        return 18 * 60
+
+    if phase == "Q2" or name == "Q2":
+        return 15 * 60
+
+    if phase == "Q3" or name == "Q3":
+        return 12 * 60
+
+    if name in ("FP1", "FP2", "FP3"):
+        return 60 * 60
+
+    return None
 
 
 def normalize_team(team_name, tla, team_colour=None):
@@ -212,6 +285,43 @@ def get_stats_entry(stats):
     )
 
 
+def current_clock_remaining():
+    anchor = state["clock_anchor_seconds"]
+    anchor_time = state["clock_anchor_time"]
+
+    if anchor is None:
+        return None
+
+    if not state["session_started"]:
+        return state["clock_frozen_seconds"]
+
+    if anchor_time is None:
+        return anchor
+
+    elapsed = max(0, time.time() - anchor_time)
+    return anchor - elapsed
+
+
+def set_clock_anchor(seconds, source, force=False):
+    if seconds is None:
+        return
+
+    now = time.time()
+    current = current_clock_remaining()
+
+    if (
+        not force
+        and current is not None
+        and abs(float(seconds) - current) < 1.5
+    ):
+        return
+
+    state["clock_anchor_seconds"] = float(seconds)
+    state["clock_anchor_time"] = now
+    state["clock_frozen_seconds"] = float(seconds)
+    state["clock_source"] = source
+
+
 def update_driver_list(data):
     data = topic_lines(data)
 
@@ -224,12 +334,7 @@ def update_driver_list(data):
 
         driver = state["drivers"].setdefault(str(number), {})
 
-        tla = (
-            info.get("Tla")
-            or info.get("TLA")
-            or driver.get("tla", "")
-        )
-
+        tla = info.get("Tla") or info.get("TLA") or driver.get("tla", "")
         team_name = (
             info.get("TeamName")
             or info.get("Team")
@@ -267,8 +372,6 @@ def update_timing_data(data):
         driver = state["drivers"].setdefault(str(number), {})
         apply_patch(driver, info)
 
-        # BestLapTime est fourni par TimingData sous la forme
-        # {"Value": "1:23.456", "Lap": 12}.
         driver["best_time"] = unwrap_value(
             driver.get("BestLapTime", driver.get("best_time", ""))
         )
@@ -319,9 +422,7 @@ def parse_gap_seconds(value):
     if not value:
         return None
 
-    match = re.fullmatch(r"[+-]?\d+(?:\.\d+)?", value)
-
-    if not match:
+    if not re.fullmatch(r"[+-]?\d+(?:\.\d+)?", value):
         return None
 
     try:
@@ -375,10 +476,7 @@ def update_tyres(data):
 
         if isinstance(stints, dict) and stints:
             try:
-                last_key = max(
-                    stints.keys(),
-                    key=lambda key: int(key),
-                )
+                last_key = max(stints.keys(), key=lambda key: int(key))
             except (ValueError, TypeError):
                 last_key = list(stints.keys())[-1]
 
@@ -398,6 +496,19 @@ def update_tyres(data):
 
         if compound:
             driver["tyre"] = str(compound)[:1].upper()
+
+
+def reset_session_timing():
+    state["session_started"] = False
+    state["session_has_started"] = False
+    state["clock_anchor_seconds"] = None
+    state["clock_anchor_time"] = None
+    state["clock_frozen_seconds"] = None
+    state["clock_source"] = ""
+
+    state["extrapolated_clock_received"] = False
+    state["extrapolated_clock_raw"] = {}
+    state["last_extrapolated_clock_update"] = 0
 
 
 def update_session_info(data):
@@ -420,76 +531,54 @@ def update_session_info(data):
         "Sprint": "SPRINT",
     }
 
-    if session_name:
-        new_name = name_map.get(
-            session_name,
-            str(session_name).upper(),
+    if not session_name:
+        return
+
+    new_name = name_map.get(
+        session_name,
+        str(session_name).upper(),
+    )
+
+    if new_name != state["session"]["name"]:
+        reset_session_timing()
+
+        state["session"]["status"] = "INACTIVE"
+        state["session"]["phase"] = ""
+        state["session"]["time_remaining"] = ""
+        state["session"]["current_lap"] = ""
+        state["session"]["total_laps"] = ""
+
+        timing_keys = (
+            "Position", "position", "Stats", "BestLapTime", "best_time",
+            "TimeDiffToFastest", "GapToLeader", "gap_to_fastest",
+            "TimeDiffToPositionAhead", "TimeDifftoPositionAhead",
+            "IntervalToPositionAhead", "Interval", "interval", "gap",
+            "NumberOfLaps", "lap", "InPit", "pit", "KnockedOut",
+            "status", "tyre", "Stints",
         )
 
-        if new_name != state["session"]["name"]:
-            # Nouvelle séance : on bloque le chrono jusqu'au véritable
-            # événement SessionStatus = Started.
-            state["session_started"] = False
-            state["session"]["status"] = "INACTIVE"
-            state["session"]["phase"] = ""
-            state["session"]["time_remaining"] = ""
-            state["session"]["current_lap"] = ""
-            state["session"]["total_laps"] = ""
+        for driver in state["drivers"].values():
+            for key in timing_keys:
+                driver.pop(key, None)
 
-            state["extrapolated_clock_received"] = False
-            state["extrapolated_clock_raw"] = {}
-            state["last_extrapolated_clock_update"] = 0
+            driver.update({
+                "gap_to_fastest": "",
+                "interval": "",
+                "gap": "",
+                "lap": "",
+                "pit": False,
+                "tyre": "",
+                "status": "",
+                "KnockedOut": False,
+            })
 
-            # On conserve l'identité des pilotes (TLA, équipe, couleur),
-            # mais on efface toutes les données de chronométrage précédentes.
-            timing_keys = (
-                "Position",
-                "position",
-                "Stats",
-                "BestLapTime",
-                "best_time",
-                "TimeDiffToFastest",
-                "GapToLeader",
-                "gap_to_fastest",
-                "TimeDiffToPositionAhead",
-                "TimeDifftoPositionAhead",
-                "IntervalToPositionAhead",
-                "Interval",
-                "interval",
-                "gap",
-                "NumberOfLaps",
-                "lap",
-                "InPit",
-                "pit",
-                "KnockedOut",
-                "status",
-                "tyre",
-                "Stints",
-            )
+        state["track"] = {
+            "status": "GREEN",
+            "label": "",
+            "sector": "",
+        }
 
-            for driver in state["drivers"].values():
-                for key in timing_keys:
-                    driver.pop(key, None)
-
-                driver.update({
-                    "gap_to_fastest": "",
-                    "interval": "",
-                    "gap": "",
-                    "lap": "",
-                    "pit": False,
-                    "tyre": "",
-                    "status": "",
-                    "KnockedOut": False,
-                })
-
-            # Le statut de piste d'une nouvelle séance repart au vert.
-            state["track"] = {
-                "status": "GREEN",
-                "label": "",
-                "sector": "",
-            }
-
-        state["session"]["name"] = new_name
+    state["session"]["name"] = new_name
 
 
 def update_session_data(data):
@@ -504,39 +593,50 @@ def update_session_data(data):
         state["session"]["status"] = str(status)
 
     if phase:
+        old_phase = str(state["session"].get("phase", "")).upper()
+        new_phase = str(phase).upper()
         state["session"]["phase"] = str(phase)
 
-    # SessionData sert uniquement de secours, et uniquement après
-    # le véritable démarrage de la séance.
-    if (
-        remaining
-        and state["session_started"]
-        and not state["extrapolated_clock_received"]
-    ):
+        if old_phase != new_phase and new_phase:
+            phase_duration = default_session_duration(
+                state["session"]["name"],
+                new_phase,
+            )
+
+            if phase_duration is not None and state["session_started"]:
+                set_clock_anchor(
+                    phase_duration,
+                    "phase_default",
+                    force=True,
+                )
+
+    if remaining not in ("", None):
         state["session"]["time_remaining"] = str(remaining)
+        seconds = parse_time_seconds(remaining)
+
+        if seconds is not None and state["session_started"]:
+            set_clock_anchor(seconds, "SessionData")
 
 
 def update_extrapolated_clock(data):
+    if isinstance(data, list):
+        for item in data:
+            update_extrapolated_clock(item)
+        return
+
     if not isinstance(data, dict):
         return
 
-    # Le flux F1 peut envoyer un premier Remaining bien avant le départ,
-    # avec Extrapolating = false. On ne l'affiche pas.
-    # Le compte à rebours devient exploitable lorsque F1 passe à true.
+    if isinstance(data.get("Value"), dict):
+        data = data["Value"]
+
+    state["extrapolated_clock_raw"] = data
+    state["last_extrapolated_clock_update"] = time.time()
+
     extrapolating = data.get("Extrapolating")
 
     if isinstance(extrapolating, str):
         extrapolating = extrapolating.strip().lower() == "true"
-
-    if extrapolating is False:
-        state["session"]["time_remaining"] = ""
-        state["extrapolated_clock_received"] = False
-        state["extrapolated_clock_raw"] = data
-        state["last_extrapolated_clock_update"] = time.time()
-        return
-
-    if extrapolating is not True:
-        return
 
     remaining = first_non_empty(
         data.get("Remaining"),
@@ -544,11 +644,20 @@ def update_extrapolated_clock(data):
         data.get("TimeRemaining"),
     )
 
-    if remaining:
+    seconds = parse_time_seconds(remaining)
+
+    if seconds is not None:
         state["session"]["time_remaining"] = remaining
+
+        if state["session_started"]:
+            set_clock_anchor(
+                seconds,
+                "ExtrapolatedClock",
+                force=False,
+            )
+
+    if extrapolating is True:
         state["extrapolated_clock_received"] = True
-        state["extrapolated_clock_raw"] = data
-        state["last_extrapolated_clock_update"] = time.time()
 
 
 def update_lap_count(data):
@@ -602,6 +711,55 @@ def update_track_status(data):
     }
 
 
+def update_session_status(payload):
+    if isinstance(payload, dict):
+        status = payload.get("Status", "")
+    else:
+        status = payload
+
+    if not status:
+        return
+
+    status_text = str(status).strip()
+    status_upper = status_text.upper()
+
+    was_started = state["session_started"]
+    is_started = status_upper == "STARTED"
+
+    state["session"]["status"] = status_text
+
+    if is_started and not was_started:
+        state["session_started"] = True
+        state["session_has_started"] = True
+
+        existing = parse_time_seconds(
+            state["session"].get("time_remaining", "")
+        )
+
+        if existing is not None:
+            set_clock_anchor(existing, "SessionData", force=True)
+        else:
+            fallback = default_session_duration(
+                state["session"]["name"],
+                state["session"].get("phase", ""),
+            )
+
+            if fallback is not None:
+                set_clock_anchor(
+                    fallback,
+                    "default_duration",
+                    force=True,
+                )
+
+    elif not is_started and was_started:
+        remaining = current_clock_remaining()
+
+        if remaining is not None:
+            state["clock_frozen_seconds"] = remaining
+
+        state["session_started"] = False
+
+
 def handle_topic(topic, payload):
     if isinstance(payload, str):
         try:
@@ -628,15 +786,7 @@ def handle_topic(topic, payload):
         update_extrapolated_clock(payload)
 
     elif topic == "SessionStatus":
-        if isinstance(payload, dict):
-            status = payload.get("Status", "")
-        else:
-            status = payload
-
-        if status:
-            status_text = str(status).strip()
-            state["session"]["status"] = status_text
-            state["session_started"] = status_text.upper() == "STARTED"
+        update_session_status(payload)
 
     elif topic == "TrackStatus":
         update_track_status(payload)
@@ -681,7 +831,6 @@ def extract_feed_entries(message):
                 "data",
                 message.get("Message"),
             )
-
             return [[topic, payload]]
 
         return []
@@ -778,11 +927,92 @@ def session_display_mode(session_name):
     return "other"
 
 
+def get_clock_data(session, track):
+    name = str(session.get("name", "")).upper()
+    status = str(session.get("status", "")).upper()
+
+    is_race = name in ("RACE", "SPRINT")
+
+    track_status = str(track.get("status", "")).upper()
+    track_label = str(track.get("label", "")).upper()
+    combined = f"{track_status} {track_label}"
+
+    track_interruption = any(
+        marker in combined
+        for marker in (
+            "YELLOW",
+            "VSC",
+            "SAFETY CAR",
+            "RED",
+            "SC DEPLOYED",
+        )
+    )
+
+    if is_race:
+        return {
+            "mode": "race",
+            "remaining_seconds": None,
+            "elapsed_seconds": None,
+            "source": "",
+        }
+
+    if track_interruption:
+        return {
+            "mode": "hidden",
+            "remaining_seconds": None,
+            "elapsed_seconds": None,
+            "source": "",
+        }
+
+    if state["session_started"]:
+        remaining = current_clock_remaining()
+
+        if remaining is None:
+            return {
+                "mode": "hidden",
+                "remaining_seconds": None,
+                "elapsed_seconds": None,
+                "source": state["clock_source"],
+            }
+
+        if remaining > 0:
+            return {
+                "mode": "countdown",
+                "remaining_seconds": remaining,
+                "elapsed_seconds": None,
+                "source": state["clock_source"],
+            }
+
+        return {
+            "mode": "overtime",
+            "remaining_seconds": 0,
+            "elapsed_seconds": abs(remaining),
+            "source": state["clock_source"],
+        }
+
+    if state["session_has_started"] and status != "STARTED":
+        return {
+            "mode": "wallclock",
+            "remaining_seconds": None,
+            "elapsed_seconds": None,
+            "source": "",
+        }
+
+    return {
+        "mode": "hidden",
+        "remaining_seconds": None,
+        "elapsed_seconds": None,
+        "source": "",
+    }
+
+
 def snapshot():
     with state_lock:
         session = dict(state["session"])
         track = dict(state["track"])
         connected = bool(state["connected"])
+
+        clock = get_clock_data(session, track)
 
         if connected and state["drivers"]:
             drivers = []
@@ -802,10 +1032,7 @@ def snapshot():
                     "position": position,
                     "tla": driver.get("tla", ""),
                     "team": driver.get("team", ""),
-                    "team_color": driver.get(
-                        "team_color",
-                        "#9aa0a6",
-                    ),
+                    "team_color": driver.get("team_color", "#9aa0a6"),
                     "interval": driver.get("interval", ""),
                     "gap_to_fastest": driver.get(
                         "gap_to_fastest",
@@ -817,9 +1044,7 @@ def snapshot():
                     "lap": driver.get("lap", ""),
                     "pit": driver.get("pit", False),
                     "status": driver.get("status", ""),
-                    "knocked_out": bool(
-                        driver.get("KnockedOut", False)
-                    ),
+                    "knocked_out": bool(driver.get("KnockedOut", False)),
                 })
 
             drivers.sort(key=lambda item: item["position"])
@@ -862,6 +1087,7 @@ def snapshot():
                 "session": session,
                 "track": track,
                 "drivers": drivers,
+                "clock": clock,
                 "server_time": datetime.now(
                     timezone.utc
                 ).strftime("%H:%M:%S"),
@@ -889,6 +1115,7 @@ def snapshot():
         "session": session,
         "track": track,
         "drivers": fallback_drivers,
+        "clock": clock,
         "server_time": datetime.now(
             timezone.utc
         ).strftime("%H:%M:%S"),
@@ -919,7 +1146,6 @@ def get_signalr_headers():
         )
 
     headers["Cookie"] = f"AWSALBCORS={cookie}"
-
     return headers
 
 
@@ -968,12 +1194,9 @@ def run_signalr_connection():
 
         closed_event.set()
 
-    def on_feed(message):
-        handle_feed_message(message)
-
     connection.on_open(on_open)
     connection.on_close(on_close)
-    connection.on("feed", on_feed)
+    connection.on("feed", handle_feed_message)
 
     connection.start()
 
@@ -1005,12 +1228,10 @@ def f1_connection_loop():
                 state["auth_ok"] = False
 
             logger.info("Connecting to F1 live timing...")
-
             run_signalr_connection()
 
         except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"
-
             logger.exception("F1 live timing connection failed")
 
             with state_lock:
@@ -1035,7 +1256,6 @@ def start_f1_connection():
         name="f1-live-timing",
         daemon=True,
     )
-
     thread.start()
 
 
@@ -1062,6 +1282,7 @@ def live():
 def debug():
     with state_lock:
         last_update = state["last_update"]
+        remaining = current_clock_remaining()
 
         driver_samples = {}
 
@@ -1073,17 +1294,14 @@ def debug():
                 "tla": driver.get("tla", ""),
                 "position": driver.get("position", ""),
                 "team": driver.get("team", ""),
-
                 "raw_time_diff_fastest": clean_gap(
                     driver.get("TimeDiffToFastest", "")
                 ),
                 "raw_time_diff_ahead": clean_gap(
                     driver.get("TimeDiffToPositionAhead", "")
                 ),
-
                 "gap_to_fastest": driver.get("gap_to_fastest", ""),
                 "interval": driver.get("interval", ""),
-
                 "stats_time_diff_fastest": clean_gap(
                     stats_entry.get("TimeDiffToFastest", "")
                 ),
@@ -1104,26 +1322,30 @@ def debug():
             ),
             "session": state["session"],
             "track": state["track"],
-
-            # Diagnostic du chrono :
-            "extrapolated_clock_received": (
-                state["extrapolated_clock_received"]
-            ),
-            "extrapolated_clock_raw": (
-                state["extrapolated_clock_raw"]
-            ),
-            "last_extrapolated_clock_update": (
-                state["last_extrapolated_clock_update"]
-            ),
-            "extrapolated_clock_age_seconds": (
-                round(
-                    time.time() - state["last_extrapolated_clock_update"],
-                    1,
-                )
-                if state["last_extrapolated_clock_update"]
-                else None
-            ),
-
+            "clock": {
+                "started": state["session_started"],
+                "has_started": state["session_has_started"],
+                "anchor_seconds": state["clock_anchor_seconds"],
+                "remaining_seconds": remaining,
+                "source": state["clock_source"],
+                "extrapolated_clock_received": (
+                    state["extrapolated_clock_received"]
+                ),
+                "extrapolated_clock_raw": (
+                    state["extrapolated_clock_raw"]
+                ),
+                "last_extrapolated_clock_update": (
+                    state["last_extrapolated_clock_update"]
+                ),
+                "extrapolated_clock_age_seconds": (
+                    round(
+                        time.time() - state["last_extrapolated_clock_update"],
+                        1,
+                    )
+                    if state["last_extrapolated_clock_update"]
+                    else None
+                ),
+            },
             "last_update": last_update,
             "last_message_age_seconds": (
                 round(time.time() - last_update, 1)

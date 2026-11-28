@@ -130,6 +130,14 @@ state = {
     "extrapolated_clock_received": False,
     "extrapolated_clock_raw": {},
     "last_extrapolated_clock_update": 0,
+
+    # Diagnostic des données de séance reçues depuis F1.
+    "session_diagnostics": {
+        "SessionInfo": None,
+        "SessionData": None,
+        "SessionStatus": None,
+        "last_received": {},
+    },
 }
 
 
@@ -767,6 +775,12 @@ def handle_topic(topic, payload):
         except json.JSONDecodeError:
             return
 
+    # On conserve les payloads bruts des topics utiles au diagnostic
+    # de la séance actuelle et de la prochaine séance.
+    if topic in ("SessionInfo", "SessionData", "SessionStatus"):
+        state["session_diagnostics"][topic] = payload
+        state["session_diagnostics"]["last_received"][topic] = time.time()
+
     if topic == "DriverList":
         update_driver_list(payload)
 
@@ -1322,6 +1336,11 @@ def debug():
             ),
             "session": state["session"],
             "track": state["track"],
+
+            # Données brutes pour analyser les informations
+            # de la séance actuelle et de la prochaine séance.
+            "session_diagnostics": state["session_diagnostics"],
+
             "clock": {
                 "started": state["session_started"],
                 "has_started": state["session_has_started"],

@@ -117,6 +117,7 @@ state = {
     "last_topics": [],
     "last_feed_shape": "",
     "subscription_snapshot_received": False,
+    "session_started": False,
 
     # Diagnostic et priorité du chrono.
     "extrapolated_clock_received": False,
@@ -420,10 +421,65 @@ def update_session_info(data):
         )
 
         if new_name != state["session"]["name"]:
+            # Nouvelle séance : on bloque le chrono jusqu'au véritable
+            # événement SessionStatus = Started.
+            state["session_started"] = False
+            state["session"]["status"] = "INACTIVE"
+            state["session"]["phase"] = ""
+            state["session"]["time_remaining"] = ""
+            state["session"]["current_lap"] = ""
+            state["session"]["total_laps"] = ""
+
             state["extrapolated_clock_received"] = False
             state["extrapolated_clock_raw"] = {}
             state["last_extrapolated_clock_update"] = 0
-            state["session"]["time_remaining"] = ""
+
+            # On conserve l'identité des pilotes (TLA, équipe, couleur),
+            # mais on efface toutes les données de chronométrage précédentes.
+            timing_keys = (
+                "Position",
+                "position",
+                "Stats",
+                "TimeDiffToFastest",
+                "GapToLeader",
+                "gap_to_fastest",
+                "TimeDiffToPositionAhead",
+                "TimeDifftoPositionAhead",
+                "IntervalToPositionAhead",
+                "Interval",
+                "interval",
+                "gap",
+                "NumberOfLaps",
+                "lap",
+                "InPit",
+                "pit",
+                "KnockedOut",
+                "status",
+                "tyre",
+                "Stints",
+            )
+
+            for driver in state["drivers"].values():
+                for key in timing_keys:
+                    driver.pop(key, None)
+
+                driver.update({
+                    "gap_to_fastest": "",
+                    "interval": "",
+                    "gap": "",
+                    "lap": "",
+                    "pit": False,
+                    "tyre": "",
+                    "status": "",
+                    "KnockedOut": False,
+                })
+
+            # Le statut de piste d'une nouvelle séance repart au vert.
+            state["track"] = {
+                "status": "GREEN",
+                "label": "",
+                "sector": "",
+            }
 
         state["session"]["name"] = new_name
 
@@ -442,15 +498,23 @@ def update_session_data(data):
     if phase:
         state["session"]["phase"] = str(phase)
 
-    # SessionData sert uniquement de secours.
-    # Dès qu'ExtrapolatedClock a fourni une valeur,
-    # SessionData ne peut plus écraser le chrono.
-    if remaining and not state["extrapolated_clock_received"]:
+    # SessionData sert uniquement de secours, et uniquement après
+    # le véritable démarrage de la séance.
+    if (
+        remaining
+        and state["session_started"]
+        and not state["extrapolated_clock_received"]
+    ):
         state["session"]["time_remaining"] = str(remaining)
 
 
 def update_extrapolated_clock(data):
     if not isinstance(data, dict):
+        return
+
+    # ExtrapolatedClock peut déjà compter avant le départ officiel.
+    # On ignore ces valeurs tant que SessionStatus n'indique pas Started.
+    if not state["session_started"]:
         return
 
     remaining = first_non_empty(
@@ -549,7 +613,15 @@ def handle_topic(topic, payload):
             status = payload
 
         if status:
-            state["session"]["status"] = str(status)
+            status_text = str(status).strip()
+            state["session"]["status"] = status_text
+            state["session_started"] = status_text.upper() == "STARTED"
+
+            if not state["session_started"]:
+                state["session"]["time_remaining"] = ""
+                state["extrapolated_clock_received"] = False
+                state["extrapolated_clock_raw"] = {}
+                state["last_extrapolated_clock_update"] = 0
 
     elif topic == "TrackStatus":
         update_track_status(payload)
